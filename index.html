@@ -501,6 +501,7 @@
 
     <script>
         const FIREBASE_DB_URL = "https://alfanik-ac5d7-default-rtdb.firebaseio.com/obs_state.json";
+        const FIREBASE_FAST_UPDATES_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_fast_updates');
 
         let activeOverlays = [];
         let customWidgetsList = JSON.parse(localStorage.getItem('obs_custom_widgets') || '[]');
@@ -514,6 +515,11 @@
         let elementStartX = 0;
         let elementStartY = 0;
         let lastCloudString = "";
+        let liveTextSaveTimer = null;
+        let cloudWritesPending = 0;
+        let cloudStateFetchPending = false;
+        let fastUpdatesFetchPending = false;
+        let stateInitialized = false;
         let builderMediaSrc = "";
         let builderMediaType = "image";
 
@@ -534,11 +540,11 @@
 
             if (modeParam === 'overlay') {
                 switchView('overlay');
-                setInterval(fetchStateFromCloud, 100);
+                setInterval(fetchStateFromCloud, 1000);
+                setInterval(fetchFastUpdatesFromCloud, 100);
                 fetchStateFromCloud();
             } else {
                 switchView('operator');
-                ensureLiveTextItem();
                 setInterval(() => {
                     if (!isDragging) fetchStateFromCloud();
                 }, 2000);
@@ -555,6 +561,13 @@
                 previewContainer.addEventListener('wheel', handleCanvasWheel, { passive: false });
             }
         };
+
+        function getCloudStateFingerprint(item) {
+            const { url, html, ...state } = item;
+            if (url !== undefined) state.mediaLength = url.length;
+            if (html !== undefined) state.htmlLength = html.length;
+            return state;
+        }
 
         function saveAndBroadcast() {
             const cleanOverlays = activeOverlays.map(item => ({
@@ -580,17 +593,90 @@
             }));
 
             const jsonString = JSON.stringify(cleanOverlays);
-            lastCloudString = jsonString;
-            
+            lastCloudString = JSON.stringify(cleanOverlays.map(getCloudStateFingerprint));
+            cloudWritesPending++;
             fetch(FIREBASE_DB_URL, {
                 method: 'PUT',
                 body: jsonString,
                 headers: { 'Content-Type': 'application/json' }
-            }).catch(err => console.error("Ошибка сохранения:", err));
+            })
+                .catch(err => console.error("Ошибка сохранения:", err))
+                .finally(() => { cloudWritesPending--; });
+        }
+
+        function sendFastUpdate(item, fields) {
+            const url = `${FIREBASE_FAST_UPDATES_URL}/${encodeURIComponent(item.id)}.json`;
+            fetch(url, {
+                method: 'PATCH',
+                body: JSON.stringify(fields),
+                headers: { 'Content-Type': 'application/json' }
+            }).catch(err => console.error("Ошибка быстрой синхронизации:", err));
+        }
+
+        function persistOverlayPatch(item, fields) {
+            const index = activeOverlays.findIndex(current => current.id === item.id);
+            if (index < 0) return;
+            const url = FIREBASE_DB_URL.replace(/\.json$/, `/${index}.json`);
+            cloudWritesPending++;
+            fetch(url, {
+                method: 'PATCH',
+                body: JSON.stringify(fields),
+                headers: { 'Content-Type': 'application/json' }
+            })
+                .catch(err => console.error("Ошибка сохранения элемента:", err))
+                .finally(() => { cloudWritesPending--; });
+        }
+
+        function fetchFastUpdatesFromCloud() {
+            if (fastUpdatesFetchPending) return;
+            fastUpdatesFetchPending = true;
+            fetch(`${FIREBASE_FAST_UPDATES_URL}.json`, { cache: 'no-store' })
+                .then(res => res.json())
+                .then(updates => {
+                    if (!updates || typeof updates !== 'object') return;
+                    let changed = false;
+                    let styleChanged = false;
+                    Object.entries(updates).forEach(([id, update]) => {
+                        const item = activeOverlays.find(current => current.id === id);
+                        if (!item || !update || typeof update !== 'object') return;
+                        if (update.x !== undefined && item.x !== update.x) {
+                            item.x = update.x;
+                            changed = true;
+                        }
+                        if (update.y !== undefined && item.y !== update.y) {
+                            item.y = update.y;
+                            changed = true;
+                        }
+                        if (update.content !== undefined && item.content !== update.content) {
+                            item.content = update.content;
+                            changed = true;
+                        }
+                        ['font', 'size', 'color', 'effect', 'bgStyle', 'anim'].forEach(field => {
+                            if (update[field] !== undefined && item[field] !== update[field]) {
+                                item[field] = update[field];
+                                changed = true;
+                                styleChanged = true;
+                            }
+                        });
+                    });
+                    if (styleChanged) renderOverlays();
+                    else if (changed) updateOverlayPositions();
+                })
+                .catch(err => console.error("Ошибка быстрой загрузки:", err))
+                .finally(() => { fastUpdatesFetchPending = false; });
+        }
+
+        function getStableOverlayState(item) {
+            const { x, y, url, html, ...stableItem } = item;
+            if (url !== undefined) stableItem.mediaLength = url.length;
+            if (html !== undefined) stableItem.htmlLength = html.length;
+            if (stableItem.type === 'text') delete stableItem.content;
+            return stableItem;
         }
 
         function fetchStateFromCloud() {
-            if (isDragging) return;
+            if (isDragging || cloudWritesPending > 0 || cloudStateFetchPending) return;
+            cloudStateFetchPending = true;
 
             fetch(FIREBASE_DB_URL, { cache: 'no-store' })
                 .then(res => res.json())
@@ -599,20 +685,25 @@
                     if (data && Array.isArray(data)) newData = data;
                     else if (data && typeof data === 'object') newData = Object.values(data);
 
-                    const newString = JSON.stringify(newData);
+                    const newString = JSON.stringify(newData.map(getCloudStateFingerprint));
                     if (newString !== lastCloudString) {
-                        const positionsOnlyChanged = JSON.stringify(newData.map(({ x, y, ...item }) => item)) ===
-                            JSON.stringify(activeOverlays.map(({ x, y, ...item }) => item));
+                        const canUpdateExistingNodes = JSON.stringify(newData.map(getStableOverlayState)) ===
+                            JSON.stringify(activeOverlays.map(getStableOverlayState));
                         lastCloudString = newString;
                         activeOverlays = newData;
-                        if (positionsOnlyChanged) {
+                        if (canUpdateExistingNodes) {
                             updateOverlayPositions();
                         } else {
                             renderOverlaysSmart();
                         }
                     }
+                    if (!stateInitialized) {
+                        stateInitialized = true;
+                        if (!document.body.classList.contains('obs-overlay-mode')) ensureLiveTextItem();
+                    }
                 })
-                .catch(err => console.error("Ошибка загрузки:", err));
+                .catch(err => console.error("Ошибка загрузки:", err))
+                .finally(() => { cloudStateFetchPending = false; });
         }
 
         function updateOverlayPositions() {
@@ -623,6 +714,10 @@
                         if (node) {
                             node.style.left = item.x + '%';
                             node.style.top = item.y + '%';
+                            if (item.type === 'text') {
+                                const textNode = node.querySelector('.text-content');
+                                if (textNode) textNode.innerText = item.content || '';
+                            }
                         }
                     });
             });
@@ -648,6 +743,14 @@
         }
 
         function ensureLiveTextItem() {
+            if (!liveTextItemId) {
+                const existingItem = activeOverlays.find(i => i.type === 'text' && i.id.startsWith('live_text_'));
+                if (existingItem) {
+                    liveTextItemId = existingItem.id;
+                    document.getElementById('text-input').value = existingItem.content || '';
+                }
+            }
+
             if (!liveTextItemId || !activeOverlays.find(i => i.id === liveTextItemId)) {
                 const textVal = document.getElementById('text-input').value;
                 const newItem = {
@@ -668,6 +771,7 @@
                 liveTextItemId = newItem.id;
                 activeOverlays.push(newItem);
                 saveAndBroadcast();
+                renderOverlays();
             }
         }
 
@@ -677,8 +781,11 @@
             const item = activeOverlays.find(i => i.id === liveTextItemId);
             if (item) {
                 item.content = textVal;
-                const node = document.querySelector(`[data-id="${item.id}"] .text-content`);
-                if (node) node.innerText = textVal;
+                document.querySelectorAll(`[data-id="${item.id}"] .text-content`)
+                    .forEach(node => { node.innerText = textVal; });
+                sendFastUpdate(item, { content: textVal });
+                clearTimeout(liveTextSaveTimer);
+                liveTextSaveTimer = setTimeout(() => persistOverlayPatch(item, { content: item.content }), 300);
             }
         }
 
@@ -693,6 +800,16 @@
                 item.bgStyle = document.getElementById('text-bg-style').value;
                 item.anim = document.getElementById('global-anim-select').value;
                 document.getElementById('text-color-hex').innerText = item.color;
+                const styleUpdate = {
+                    font: item.font,
+                    size: item.size,
+                    color: item.color,
+                    effect: item.effect,
+                    bgStyle: item.bgStyle,
+                    anim: item.anim
+                };
+                sendFastUpdate(item, styleUpdate);
+                persistOverlayPatch(item, styleUpdate);
                 renderOverlays();
             }
         }
@@ -1119,7 +1236,7 @@
                 const now = Date.now();
                 if (now - lastDragBroadcastAt >= 100) {
                     lastDragBroadcastAt = now;
-                    saveAndBroadcast();
+                    sendFastUpdate(item, { x: newX, y: newY });
                 }
             }
         }
@@ -1137,9 +1254,13 @@
                 resizeDir = '';
             }
             if (isDragging) {
+                const item = activeOverlays.find(current => current.id === dragTargetId);
+                if (item) {
+                    sendFastUpdate(item, { x: item.x, y: item.y });
+                    persistOverlayPatch(item, { x: item.x, y: item.y });
+                }
                 isDragging = false;
                 dragTargetId = null;
-                saveAndBroadcast(); // Координаты улетают в облако ровно в момент отпускания мышки
             }
         }
 
@@ -1170,31 +1291,53 @@
             reader.readAsDataURL(file);
         }
 
+        function getOverlayRenderSignature(item) {
+            const { x, y, scale, url, html, ...contentState } = item;
+            if (url !== undefined) contentState.mediaLength = url.length;
+            if (html !== undefined) contentState.htmlLength = html.length;
+            return JSON.stringify(contentState);
+        }
+
         function renderOverlays() {
             const obsCanvas = document.getElementById('obs-render-canvas');
             const operatorCanvas = document.getElementById('operator-overlay-canvas');
             const activeList = document.getElementById('active-elements-list');
             const badge = document.getElementById('active-count-badge');
+            const overlayMode = document.body.classList.contains('obs-overlay-mode');
+            const activeCanvas = overlayMode ? obsCanvas : operatorCanvas;
+            const inactiveCanvas = overlayMode ? operatorCanvas : obsCanvas;
+            if (inactiveCanvas) inactiveCanvas.innerHTML = '';
+            const canvases = activeCanvas ? [activeCanvas] : [];
+            const visibleItems = activeOverlays.filter(item => !item.hidden);
+            const visibleIds = new Set(visibleItems.map(item => item.id));
 
             if (badge) badge.innerText = activeOverlays.length;
 
-            if (obsCanvas) obsCanvas.innerHTML = '';
-            if (operatorCanvas) operatorCanvas.innerHTML = '';
+            canvases.forEach(canvas => {
+                Array.from(canvas.children).forEach(node => {
+                    if (!visibleIds.has(node.dataset.id)) node.remove();
+                });
+            });
 
-            activeOverlays.forEach(item => {
-                if (item.hidden) return;
-
-                // Создаем узел для OBS оверлея
-                if (obsCanvas) {
-                    const obsNode = createOverlayElementNode(item, false);
-                    obsCanvas.appendChild(obsNode);
-                }
-
-                // Создаем интерактивный узел для пульта модератора
-                if (operatorCanvas) {
-                    const opNode = createOverlayElementNode(item, true);
-                    operatorCanvas.appendChild(opNode);
-                }
+            visibleItems.forEach(item => {
+                const signature = getOverlayRenderSignature(item);
+                canvases.forEach(canvas => {
+                    const isInteractive = canvas.id === 'operator-overlay-canvas';
+                    let node = canvas.querySelector(`[data-id="${item.id}"]`);
+                    if (!node || node.dataset.renderSignature !== signature) {
+                        const replacement = createOverlayElementNode(item, isInteractive);
+                        if (node) {
+                            canvas.replaceChild(replacement, node);
+                        } else {
+                            canvas.appendChild(replacement);
+                        }
+                        node = replacement;
+                    } else {
+                        node.style.left = item.x + '%';
+                        node.style.top = item.y + '%';
+                        node.style.transform = `translate3d(-50%, -50%, 0) scale(${item.scale || 1})`;
+                    }
+                });
             });
 
             renderActiveElementsList(activeList);
@@ -1209,6 +1352,7 @@
         function createOverlayElementNode(item, isInteractive) {
             const node = document.createElement('div');
             node.dataset.id = item.id;
+            node.dataset.renderSignature = getOverlayRenderSignature(item);
             const animClass = item.anim || 'anim-fade';
             node.className = `absolute flex items-center justify-center ${animClass} ${isInteractive ? 'draggable-item pointer-events-auto cursor-move' : 'pointer-events-none'}`;
             
