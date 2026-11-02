@@ -1,563 +1,1349 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OBS Live Overlay Studio</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <style>
-        @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        @keyframes zoomIn { from { opacity: 0; transform: scale(0.5); } to { opacity: 1; transform: scale(1); } }
-        @keyframes slideDown { from { opacity: 0; transform: translateY(-30px); } to { opacity: 1; transform: translateY(0); } }
+    <title>OBS Live Overlay Studio Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        obs: {
+                            dark: '#080c14',
+                            card: '#111827',
+                            panel: '#151d30',
+                            border: '#243049',
+                            accent: '#6366f1',
+                            accentHover: '#4f46e5'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Montserrat:wght@700;900&family=Press+Start+2P&family=Roboto+Condensed:wght@700&display=swap" rel="stylesheet">
 
-        .anim-fade { animation: fadeIn 0.3s ease-out forwards; }
-        .anim-zoom { animation: zoomIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
-        .anim-slide { animation: slideDown 0.3s ease-out forwards; }
+    <style>
+        body.obs-overlay-mode {
+            background-color: transparent !important;
+            overflow: hidden;
+        }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes zoomIn { from { transform: scale(0.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        @keyframes slideDown { from { transform: translateY(-50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes bounceIn {
+            0% { transform: scale(0.3); opacity: 0; }
+            50% { transform: scale(1.05); }
+            70% { transform: scale(0.9); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .anim-fade { animation: fadeIn 0.35s ease-out forwards; }
+        .anim-zoom { animation: zoomIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        .anim-slide { animation: slideDown 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .anim-bounce { animation: bounceIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
         .anim-none { opacity: 1 !important; transform: none !important; }
 
-        body { background-color: #0b0f19; color: #f3f4f6; font-family: system-ui, -apple-system, sans-serif; }
+        .text-outline-dark {
+            text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0px 4px 12px rgba(0,0,0,0.9);
+        }
+        .text-outline-glow {
+            text-shadow: 0 0 15px rgba(99, 102, 241, 0.9), 0 0 30px rgba(99, 102, 241, 0.5), -2px -2px 0 #000, 2px 2px 0 #000;
+        }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #080c14; }
+        ::-webkit-scrollbar-thumb { background: #243049; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3b4c6e; }
+
+        .draggable-item {
+            cursor: move;
+            user-select: none;
+            touch-action: none;
+            position: absolute;
+            will-change: transform, left, top;
+        }
+        .draggable-item:hover {
+            outline: 2px dashed #6366f1;
+            outline-offset: 4px;
+        }
     </style>
 </head>
-<body class="min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
+<body class="bg-obs-dark text-slate-100 font-sans min-h-screen antialiased flex flex-col selection:bg-indigo-600 selection:text-white">
 
-    <!-- РЕЖИМ ОВЕРЛЕЯ ДЛЯ OBS -->
-    <div id="obs-overlay-view" class="hidden fixed inset-0 overflow-hidden pointer-events-none z-50">
-        <div id="active-elements-container" class="relative w-full h-full"></div>
-    </div>
-
-    <!-- ОСНОВНАЯ ПАНЕЛЬ УПРАВЛЕНИЯ -->
-    <div id="control-panel-view" class="flex flex-col min-h-screen">
-        <header class="bg-gray-900/90 backdrop-blur border-b border-gray-800 px-6 py-4 flex items-center justify-between sticky top-0 z-40 shadow-lg">
-            <div class="flex items-center space-x-3">
-                <div class="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                </div>
-                <div>
-                    <h1 class="text-sm font-extrabold tracking-wider text-white uppercase">OBS Live Overlay Studio</h1>
-                    <p class="text-[11px] text-gray-400">Пульт Модератора</p>
-                </div>
+    <header id="main-header" class="bg-obs-card/90 backdrop-blur border-b border-obs-border px-6 py-3.5 sticky top-0 z-50 flex items-center justify-between shadow-2xl">
+        <div class="flex items-center gap-3">
+            <div class="bg-indigo-600 text-white p-2 rounded-xl font-black text-lg flex items-center justify-center w-10 h-10 shadow-lg shadow-indigo-600/30">
+                <i class="fa-solid fa-tower-broadcast"></i>
             </div>
+            <div>
+                <h1 class="font-extrabold text-sm tracking-wider uppercase text-white leading-tight">OBS LIVE OVERLAY STUDIO</h1>
+                <p class="text-[11px] text-slate-400">Пульт Модератора & Облачный Оверлей</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-4">
+            <div class="hidden sm:flex items-center gap-2 bg-emerald-950/60 border border-emerald-500/40 px-3.5 py-1.5 rounded-full text-xs font-medium text-emerald-400">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>Облачное соединение для модераторов</span>
+            </div>
+
+            <button onclick="copyOverlayLink()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition shadow-lg shadow-indigo-600/20 cursor-pointer">
+                <i class="fa-solid fa-link"></i>
+                <span>Ссылка OBS</span>
+            </button>
+        </div>
+    </header>
+
+    <main class="flex-1 flex flex-col relative overflow-hidden">
+        
+        <div id="view-operator" class="flex-1 p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-y-auto max-w-[1920px] mx-auto w-full">
             
-            <div class="flex items-center space-x-3">
-                <button onclick="copyOverlayLink()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-xl text-xs font-semibold transition shadow-lg shadow-indigo-600/20 cursor-pointer flex items-center space-x-2">
-                    <span>🔗 Ссылка OBS</span>
-                </button>
-            </div>
-        </header>
-
-        <main class="flex-1 p-6 grid grid-cols-1 xl:grid-cols-3 gap-6 max-w-7xl mx-auto w-full">
-            <div class="xl:col-span-2 flex flex-col space-y-4">
-                <div class="bg-gray-900/60 border border-gray-800 rounded-2xl p-4 flex flex-col shadow-xl">
-                    <div class="flex justify-between items-center mb-3">
-                        <span class="text-xs uppercase font-semibold text-gray-400 tracking-wider flex items-center space-x-2">
-                            <span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-                            <span>Предпросмотр экрана (16:9)</span>
-                        </span>
-                        <div class="flex items-center space-x-2">
-                            <select id="preview-source-type" onchange="updateTwitchPreview()" class="bg-gray-800 border border-gray-700 text-xs rounded-lg px-2.5 py-1.5 text-gray-300 focus:outline-none">
-                                <option value="twitch">Twitch Embed</option>
-                                <option value="test">Тестовый фон</option>
-                            </select>
-                            <input type="text" id="twitch-channel-input" placeholder="Канал" value="dell11q" onchange="updateTwitchPreview()" class="bg-gray-800 border border-gray-700 text-xs rounded-lg px-2.5 py-1.5 text-gray-200 w-24">
+            <div class="lg:col-span-7 flex flex-col gap-6">
+                
+                <div class="bg-obs-card border border-obs-border rounded-2xl p-4 shadow-xl flex flex-col">
+                    <div class="flex items-center justify-between gap-2 mb-3">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse"></span>
+                            <h2 class="font-bold text-xs uppercase tracking-wider text-slate-300">Пульт управления (Предпросмотр 16:9)</h2>
                         </div>
-                    </div>
-
-                    <div id="preview-canvas" class="relative w-full aspect-video bg-black/90 rounded-xl overflow-hidden border border-gray-800 shadow-inner select-none flex items-center justify-center">
-                        <div id="preview-stream-bg" class="absolute inset-0 z-0 flex items-center justify-center pointer-events-none">
-                            <div id="twitch-embed-container" class="w-full h-full"></div>
-                        </div>
-                        <div id="preview-elements-layer" class="absolute inset-0 z-10 pointer-events-none"></div>
                         
-                        <div class="absolute bottom-2 left-2 bg-black/60 backdrop-blur px-2.5 py-1 rounded text-[10px] text-gray-400 z-20 pointer-events-none">
-                            💡 Зажмите элемент мышкой на превью для перемещения
+                        <div class="flex items-center gap-2">
+                            <select id="stream-provider" onchange="onStreamProviderChange()" class="bg-slate-900 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-300 outline-none focus:border-indigo-500">
+                                <option value="twitch">Twitch Embed</option>
+                                <option value="screenshot">Скриншот игры / Фон</option>
+                                <option value="testvideo">Тестовый поток</option>
+                            </select>
+                            <input type="text" id="twitch-channel-input" value="dell11q" onchange="onStreamProviderChange()" placeholder="Канал Twitch" class="bg-slate-900 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-200 w-28 outline-none focus:border-indigo-500">
+                        </div>
+                    </div>
+
+                    <div id="preview-container" class="relative w-full aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 shadow-inner group select-none">
+                        <div id="preview-bg-holder" class="w-full h-full pointer-events-none">
+                            <iframe id="twitch-frame" src="https://player.twitch.tv/?channel=dell11q&parent=localhost&muted=true" class="w-full h-full border-0 pointer-events-auto"></iframe>
+                        </div>
+
+                        <div id="operator-overlay-canvas" class="absolute inset-0 z-20 overflow-hidden pointer-events-auto"></div>
+
+                        <div class="absolute top-3 right-3 z-30 flex items-center gap-2">
+                            <label class="bg-slate-900/90 hover:bg-slate-800 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer backdrop-blur shadow flex items-center gap-1.5 transition">
+                                <i class="fa-solid fa-camera text-indigo-400"></i> Загрузить фон стрима
+                                <input type="file" accept="image/*" class="hidden" onchange="uploadCustomBackground(event)">
+                            </label>
+                        </div>
+
+                        <div class="absolute bottom-3 left-3 z-30 bg-slate-900/90 border border-slate-700/80 px-3 py-1 rounded-lg text-[11px] text-slate-300 backdrop-blur pointer-events-none flex items-center gap-1.5">
+                            <i class="fa-solid fa-hand-pointer text-indigo-400"></i> Перетаскивайте элементы мышкой • Колесико: масштаб
                         </div>
                     </div>
                 </div>
 
-                <div class="bg-gray-900/60 border border-gray-800 rounded-2xl p-4 flex flex-col shadow-xl">
-                    <div class="flex justify-between items-center mb-3">
-                        <h3 class="text-sm font-semibold text-gray-300">Активные элементы на экране</h3>
-                        <button onclick="clearAllOverlays()" class="text-xs text-red-400 hover:text-red-300 transition cursor-pointer">Очистить всё</button>
+                <div class="bg-obs-card border border-obs-border rounded-2xl p-4 shadow-xl flex-1 flex flex-col">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-layer-group text-indigo-400"></i>
+                            <h2 class="font-bold text-xs uppercase tracking-wider text-slate-300">Активные элементы оверлея</h2>
+                            <span id="active-count-badge" class="bg-indigo-900/60 border border-indigo-500/40 text-indigo-300 text-xs px-2 py-0.5 rounded-full font-mono">0</span>
+                        </div>
+
+                        <button onclick="clearAllOverlays()" class="bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-500/30 px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer">
+                            <i class="fa-solid fa-trash-can"></i> Очистить всё
+                        </button>
                     </div>
-                    <div id="active-elements-list" class="space-y-2 max-h-40 overflow-y-auto pr-1">
-                        <span class="text-xs text-gray-500 italic">Нет активных элементов</span>
+
+                    <div id="active-elements-list" class="flex-1 min-h-[140px] max-h-[260px] overflow-y-auto space-y-2 pr-1">
+                        <div id="empty-active-state" class="h-full flex flex-col items-center justify-center p-6 text-center text-slate-500 border border-dashed border-slate-700/60 rounded-xl">
+                            <i class="fa-solid fa-ghost text-3xl mb-2 text-slate-600"></i>
+                            <p class="text-xs">Экран пуст. Добавьте элемент справа.</p>
+                        </div>
                     </div>
                 </div>
+
             </div>
 
-            <div class="space-y-6">
-                <div class="bg-gray-900/60 border border-gray-800 rounded-2xl p-5 shadow-xl flex flex-col space-y-4">
-                    <div class="flex border-b border-gray-800 pb-3 space-x-1 overflow-x-auto">
-                        <button onclick="switchTab('text')" id="tab-btn-text" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white transition">Текст</button>
-                        <button onclick="switchTab('widgets')" id="tab-btn-widgets" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-800 text-gray-400 hover:text-white transition">Виджеты</button>
-                        <button onclick="switchTab('image')" id="tab-btn-image" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-800 text-gray-400 hover:text-white transition">Картинка</button>
-                        <button onclick="switchTab('video')" id="tab-btn-video" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-800 text-gray-400 hover:text-white transition">Видео</button>
-                    </div>
-
-                    <div class="bg-gray-800/40 border border-gray-700/50 rounded-xl p-3 space-y-2">
-                        <label class="block text-[11px] font-medium text-gray-300">Анимация появления:</label>
-                        <select id="global-animation" class="w-full bg-gray-800 border border-gray-700 text-xs rounded-lg px-2.5 py-1.5 text-gray-200">
-                            <option value="none">Без анимации</option>
-                            <option value="fade">Плавное появление (Fade)</option>
-                            <option value="zoom">Увеличение (Zoom)</option>
-                            <option value="slide">Вылет сверху (Slide)</option>
+            <div class="lg:col-span-5 flex flex-col gap-6">
+                
+                <div class="bg-obs-card border border-obs-border rounded-2xl p-5 shadow-xl flex flex-col">
+                    
+                    <div class="bg-slate-900/80 border border-slate-700/80 rounded-xl p-3 mb-5 flex items-center justify-between gap-3">
+                        <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                            <i class="fa-solid fa-wand-magic-sparkles text-indigo-400"></i> Анимация появления:
+                        </label>
+                        <select id="global-anim-select" onchange="onGlobalAnimChange()" class="bg-obs-dark border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-indigo-500">
+                            <option value="anim-none">Без анимации</option>
+                            <option value="anim-fade" selected>Проявление (Fade)</option>
+                            <option value="anim-zoom">Увеличение (Zoom)</option>
+                            <option value="anim-slide">Сверху (Slide Down)</option>
+                            <option value="anim-bounce">Прыжок (Bounce)</option>
                         </select>
                     </div>
 
-                    <!-- Панель ТЕКСТ -->
-                    <div id="tab-content-text" class="space-y-3">
-                        <label class="block text-xs font-medium text-gray-400">Текст сообщения</label>
-                        <textarea id="text-input" oninput="liveUpdateText()" rows="3" placeholder="Введите текст, появится сразу..." class="w-full bg-gray-800 border border-gray-700 rounded-xl p-3 text-sm text-gray-100 focus:outline-none focus:border-indigo-500"></textarea>
-                        <div class="grid grid-cols-2 gap-2">
-                            <div>
-                                <label class="block text-[11px] text-gray-400 mb-1">Размер шрифта</label>
-                                <input type="number" id="text-size" value="36" onchange="liveUpdateText()" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-xs">
+                    <div class="flex border-b border-slate-700/80 mb-5 gap-2 overflow-x-auto pb-1">
+                        <button id="tab-btn-text" onclick="switchControlTab('text')" class="px-3 py-2 text-xs font-bold border-b-2 border-indigo-500 text-white flex items-center gap-1.5 transition cursor-pointer">
+                            <i class="fa-solid fa-font text-indigo-400"></i> Текст
+                        </button>
+                        <button id="tab-btn-image" onclick="switchControlTab('image')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
+                            <i class="fa-solid fa-image text-emerald-400"></i> Картинка
+                        </button>
+                        <button id="tab-btn-video" onclick="switchControlTab('video')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
+                            <i class="fa-solid fa-video text-purple-400"></i> Видео
+                        </button>
+                        <button id="tab-btn-widgets" onclick="switchControlTab('widgets')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
+                            <i class="fa-solid fa-shapes text-amber-400"></i> Виджеты
+                        </button>
+                    </div>
+
+                    <!-- TAB 1: TEXT -->
+                    <div id="tab-content-text" class="space-y-4">
+                        <div>
+                            <div class="flex justify-between items-center mb-1">
+                                <label class="block text-xs font-semibold text-slate-300">Текст оверлея (Синхронизация на лету)</label>
+                                <span class="text-[10px] text-emerald-400 flex items-center gap-1"><i class="fa-solid fa-bolt"></i>Живой ввод</span>
                             </div>
+                            <textarea id="text-input" rows="3" oninput="onLiveTextTyping()" placeholder="Введите текст..." class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition resize-none">ПРИВЕТ СТРИМ! 🔥 ВСЕМ ПРИЯТНОГО ПРОСМОТРА!</textarea>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-[11px] text-gray-400 mb-1">Цвет текста</label>
-                                <input type="color" id="text-color" value="#ffffff" onchange="liveUpdateText()" class="w-full h-8 bg-gray-800 border border-gray-700 rounded-lg cursor-pointer px-1">
+                                <label class="block text-[11px] font-semibold text-slate-400 mb-1">Шрифт</label>
+                                <select id="text-font" onchange="onLiveTextStyleChange()" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200">
+                                    <option value="'Montserrat', sans-serif" selected>Montserrat (Жирный)</option>
+                                    <option value="'Inter', sans-serif">Inter (Современный)</option>
+                                    <option value="'Press Start 2P', cursive">Retro Pixel</option>
+                                    <option value="'Roboto Condensed', sans-serif">Esports Bold</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-[11px] font-semibold text-slate-400 mb-1">Размер текста</label>
+                                <select id="text-size" onchange="onLiveTextStyleChange()" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200">
+                                    <option value="text-2xl">Маленький (24px)</option>
+                                    <option value="text-4xl" selected>Средний (36px)</option>
+                                    <option value="text-6xl">Большой (60px)</option>
+                                    <option value="text-7xl">Огромный (72px)</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-[11px] font-semibold text-slate-400 mb-1">Цвет текста</label>
+                                <div class="flex gap-2 items-center">
+                                    <input type="color" id="text-color" value="#ffffff" oninput="onLiveTextStyleChange()" class="w-8 h-8 rounded cursor-pointer bg-transparent border-0">
+                                    <span class="text-xs font-mono text-slate-400" id="text-color-hex">#ffffff</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-[11px] font-semibold text-slate-400 mb-1">Эффект обводки / Тени</label>
+                                <select id="text-effect" onchange="onLiveTextStyleChange()" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200">
+                                    <option value="text-outline-dark" selected>Черный контур</option>
+                                    <option value="text-outline-glow">Неоновое свечение</option>
+                                    <option value="none">Без эффекта</option>
+                                </select>
                             </div>
                         </div>
-                        <button onclick="createNewElement('text')" class="w-full bg-indigo-600 hover:bg-indigo-500 py-2.5 rounded-xl text-xs font-semibold transition mt-2 cursor-pointer">Создать новый текст</button>
+
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-400 mb-1">Фон текстовой карточки</label>
+                            <select id="text-bg-style" onchange="onLiveTextStyleChange()" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200">
+                                <option value="transparent" selected>Прозрачный (Только текст по умолчанию)</option>
+                                <option value="dark">Тёмная карточка (90%)</option>
+                                <option value="indigo">Фиолетовая карточка</option>
+                            </select>
+                        </div>
+
+                        <button onclick="createNewTextOverlay()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-sm mt-4 cursor-pointer">
+                            <i class="fa-solid fa-plus"></i> Создать новый текстовый блок
+                        </button>
                     </div>
 
-                    <!-- Панель ВИДЖЕТЫ -->
+                    <!-- TAB 2: IMAGE -->
+                    <div id="tab-content-image" class="space-y-4 hidden">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-300 mb-1.5">Загрузить файл с компьютера (PNG, JPG, GIF)</label>
+                            <input type="file" id="image-file-input" accept="image/*" onchange="handleImageFileUpload(event)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-slate-300 file:mr-4 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500 cursor-pointer">
+                        </div>
+
+                        <div class="relative flex py-1 items-center">
+                            <div class="flex-grow border-t border-slate-800"></div>
+                            <span class="flex-shrink mx-3 text-[10px] text-slate-500 uppercase font-mono">или укажите URL</span>
+                            <div class="flex-grow border-t border-slate-800"></div>
+                        </div>
+
+                        <div>
+                            <input type="url" id="image-url-input" placeholder="https://media.giphy.com/.../giphy.gif" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition">
+                        </div>
+
+                        <button onclick="sendImageUrlOverlay()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-sm mt-2 cursor-pointer">
+                            <i class="fa-solid fa-image"></i> Вывести изображение по URL
+                        </button>
+                    </div>
+
+                    <!-- TAB 3: VIDEO -->
+                    <div id="tab-content-video" class="space-y-4 hidden">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-300 mb-1.5">Загрузить видео файл (MP4, WebM)</label>
+                            <input type="file" id="video-file-input" accept="video/mp4,video/webm" onchange="handleVideoFileUpload(event)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-slate-300 file:mr-4 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-purple-600 file:text-white hover:file:bg-purple-500 cursor-pointer">
+                        </div>
+
+                        <div class="relative flex py-1 items-center">
+                            <div class="flex-grow border-t border-slate-800"></div>
+                            <span class="flex-shrink mx-3 text-[10px] text-slate-500 uppercase font-mono">или укажите URL</span>
+                            <div class="flex-grow border-t border-slate-800"></div>
+                        </div>
+
+                        <div>
+                            <input type="url" id="video-url-input" placeholder="https://commondatastorage.googleapis.com/.../video.mp4" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition">
+                        </div>
+
+                        <div>
+                            <div class="flex justify-between items-center mb-1">
+                                <label class="block text-[11px] font-semibold text-slate-400">Громкость</label>
+                                <span class="text-[10px] text-purple-400 font-mono" id="vol-val">80%</span>
+                            </div>
+                            <input type="range" id="video-volume" min="0" max="100" value="80" oninput="onLiveVolumeInput(this.value)" class="w-full accent-purple-500">
+                        </div>
+
+                        <button onclick="sendVideoUrlOverlay()" class="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-sm mt-2 cursor-pointer">
+                            <i class="fa-solid fa-video"></i> Вывести видео по URL
+                        </button>
+                    </div>
+
+                    <!-- TAB 4: WIDGETS -->
                     <div id="tab-content-widgets" class="space-y-3 hidden">
-                        <label class="block text-xs font-medium text-gray-400 mb-2">Готовые плашки для стрима</label>
-                        <button onclick="sendWidget('telegram')" class="w-full flex items-center justify-between bg-gradient-to-r from-sky-600 to-blue-700 hover:from-sky-500 hover:to-blue-600 p-3 rounded-xl text-xs font-semibold text-white transition shadow-lg cursor-pointer">
-                            <span class="flex items-center space-x-2">
-                                <span class="text-base">✈️</span>
-                                <span>Telegram: t.me/Dell11q</span>
-                            </span>
-                            <span class="bg-black/30 px-2 py-1 rounded text-[10px]">Вывести</span>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Готовые виджеты для стрима</label>
+                        
+                        <button onclick="openWidgetBuilderModal()" class="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 p-3.5 rounded-xl text-xs font-bold text-white transition shadow-lg cursor-pointer mb-2">
+                            <i class="fa-solid fa-wand-magic-sparkles text-base"></i>
+                            <span>➕ Создать новый виджет (Конструктор)</span>
                         </button>
 
-                        <button onclick="sendWidget('follow')" class="w-full flex items-center justify-between bg-gradient-to-r from-purple-600 to-indigo-700 hover:from-purple-500 hover:to-indigo-600 p-3 rounded-xl text-xs font-semibold text-white transition shadow-lg cursor-pointer">
-                            <span class="flex items-center space-x-2">
-                                <span class="text-base">💜</span>
-                                <span>Напоминание: Прожми Фоллоу!</span>
-                            </span>
-                            <span class="bg-black/30 px-2 py-1 rounded text-[10px]">Вывести</span>
+                        <div id="custom-widgets-container" class="space-y-2"></div>
+
+                        <button onclick="sendWidget('telegram')" class="w-full flex items-center justify-between bg-gradient-to-r from-sky-600 to-blue-700 hover:from-sky-500 hover:to-blue-600 p-3.5 rounded-xl text-xs font-semibold text-white transition shadow-lg cursor-pointer group">
+                            <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-base">
+                                    <i class="fa-solid fa-paper-plane text-white"></i>
+                                </div>
+                                <div class="text-left">
+                                    <div class="text-[10px] uppercase font-bold text-sky-200">Telegram Стримера</div>
+                                    <div class="text-sm font-extrabold">t.me/Dell11q</div>
+                                </div>
+                            </div>
+                            <span class="bg-black/30 group-hover:bg-black/50 px-2.5 py-1 rounded-lg text-[10px] transition">Вывести</span>
                         </button>
 
-                        <button onclick="sendWidget('donate')" class="w-full flex items-center justify-between bg-gradient-to-r from-amber-600 to-orange-700 hover:from-amber-500 hover:to-orange-600 p-3 rounded-xl text-xs font-semibold text-white transition shadow-lg cursor-pointer">
-                            <span class="flex items-center space-x-2">
-                                <span class="text-base">💰</span>
-                                <span>Поддержать (Донат)</span>
-                            </span>
-                            <span class="bg-black/30 px-2 py-1 rounded text-[10px]">Вывести</span>
+                        <button onclick="sendWidget('follow')" class="w-full flex items-center justify-between bg-gradient-to-r from-purple-600 to-indigo-700 hover:from-purple-500 hover:to-indigo-600 p-3.5 rounded-xl text-xs font-semibold text-white transition shadow-lg cursor-pointer group">
+                            <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-base">
+                                    <i class="fa-solid fa-heart text-white animate-pulse"></i>
+                                </div>
+                                <div class="text-left">
+                                    <div class="text-[10px] uppercase font-bold text-purple-200">Напоминание</div>
+                                    <div class="text-sm font-extrabold">Прожми Фоллоу! 💜</div>
+                                </div>
+                            </div>
+                            <span class="bg-black/30 group-hover:bg-black/50 px-2.5 py-1 rounded-lg text-[10px] transition">Вывести</span>
+                        </button>
+
+                        <button onclick="sendWidget('donate')" class="w-full flex items-center justify-between bg-gradient-to-r from-amber-600 to-orange-700 hover:from-amber-500 hover:to-orange-600 p-3.5 rounded-xl text-xs font-semibold text-white transition shadow-lg cursor-pointer group">
+                            <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-base">
+                                    <i class="fa-solid fa-coins text-white"></i>
+                                </div>
+                                <div class="text-left">
+                                    <div class="text-[10px] uppercase font-bold text-amber-200">Поддержка</div>
+                                    <div class="text-sm font-extrabold">Поддержать Стримера 💰</div>
+                                </div>
+                            </div>
+                            <span class="bg-black/30 group-hover:bg-black/50 px-2.5 py-1 rounded-lg text-[10px] transition">Вывести</span>
                         </button>
                     </div>
 
-                    <!-- Панель КАРТИНКА -->
-                    <div id="tab-content-image" class="space-y-3 hidden">
-                        <label class="block text-xs font-medium text-gray-400">Прямая ссылка на картинку / GIF</label>
-                        <input type="text" id="image-url-input" placeholder="https://site.com/image.png" class="w-full bg-gray-800 border border-gray-700 rounded-xl p-2.5 text-xs text-gray-200">
-                        <button onclick="sendMediaElement('image')" class="w-full bg-indigo-600 hover:bg-indigo-500 py-2.5 rounded-xl text-xs font-semibold transition mt-2 cursor-pointer">Отправить картинку</button>
+                </div>
+
+            </div>
+
+        </div>
+
+        <div id="view-overlay" class="hidden absolute inset-0 w-full h-full pointer-events-none overflow-hidden">
+            <div id="obs-render-canvas" class="relative w-full h-full"></div>
+        </div>
+
+    </main>
+
+    <!-- МОДАЛЬНОЕ ОКНО КОНСТРУКТОРА ВИДЖЕТОВ -->
+    <div id="widget-builder-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-obs-card border border-obs-border rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 shadow-2xl flex flex-col gap-6 relative">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-4">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-wand-magic-sparkles text-indigo-400"></i> Продвинутый конструктор виджетов
+                </h3>
+                <button onclick="closeWidgetBuilderModal()" class="text-slate-400 hover:text-white text-lg cursor-pointer">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Медиа файл (Картинка / GIF / Видео)</label>
+                        <input type="file" id="bw-file" accept="image/*,video/mp4,video/webm" onchange="handleBuilderFile(event)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-300 file:bg-indigo-600 file:text-white file:rounded-lg file:border-0 file:py-1 file:px-3 file:text-xs file:font-semibold cursor-pointer">
                     </div>
 
-                    <!-- Панель ВИДЕО -->
-                    <div id="tab-content-video" class="space-y-3 hidden">
-                        <label class="block text-xs font-medium text-gray-400">Прямая ссылка на MP4 / WebM</label>
-                        <input type="text" id="video-url-input" placeholder="https://site.com/video.mp4" class="w-full bg-gray-800 border border-gray-700 rounded-xl p-2.5 text-xs text-gray-200">
-                        <button onclick="sendMediaElement('video')" class="w-full bg-indigo-600 hover:bg-indigo-500 py-2.5 rounded-xl text-xs font-semibold transition mt-2 cursor-pointer">Отправить видео</button>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Или прямая ссылка на медиа</label>
+                        <input type="url" id="bw-url" oninput="updateBuilderPreview()" placeholder="https://site.com/image.png" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-400 mb-1">Громкость звука (%)</label>
+                            <input type="number" id="bw-vol" value="80" min="0" max="100" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-400 mb-1">Фон карточки</label>
+                            <select id="bw-bg-toggle" onchange="updateBuilderPreview()" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white">
+                                <option value="solid" selected>Тёмная подложка</option>
+                                <option value="transparent">Прозрачный фон</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-[11px] font-semibold text-slate-400 mb-1">Текст под медиа</label>
+                        <input type="text" id="bw-text" value="Новый донат! 🎉" oninput="updateBuilderPreview()" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-400 mb-1">Анимация появления</label>
+                            <select id="bw-anim" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white">
+                                <option value="anim-fade">Fade</option>
+                                <option value="anim-zoom">Zoom</option>
+                                <option value="anim-slide">Slide Down</option>
+                                <option value="anim-bounce">Bounce</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-semibold text-slate-400 mb-1">Цвет рамки / акцента</label>
+                            <input type="color" id="bw-color" value="#6366f1" oninput="updateBuilderPreview()" class="w-full h-8 bg-slate-900 border border-slate-700 rounded-lg cursor-pointer px-1">
+                        </div>
                     </div>
                 </div>
+
+                <div class="flex flex-col gap-3">
+                    <div class="flex flex-col bg-black/60 border border-slate-800 rounded-2xl p-4 items-center justify-center relative min-h-[260px] overflow-hidden w-full">
+                        <span class="absolute top-3 left-3 text-[10px] uppercase font-bold text-slate-500 z-10">Живое превью</span>
+                        <div id="builder-preview-box" class="flex flex-col items-center gap-3 p-4 rounded-xl transition-all max-w-full max-h-full overflow-auto">
+                            <div id="bw-prev-media" class="w-full flex items-center justify-center"></div>
+                            <div id="bw-prev-text" class="text-sm font-bold text-white text-center"></div>
+                        </div>
+                    </div>
+
+                    <button onclick="openWidgetResizeModal()" class="w-full bg-slate-800 hover:bg-slate-700 border border-indigo-500/50 text-indigo-300 font-bold py-2.5 px-4 rounded-xl shadow transition text-xs flex items-center justify-center gap-2 cursor-pointer">
+                        <i class="fa-solid fa-arrows-up-down-left-right text-indigo-400"></i> Выдать размер (Растянуть / Расширить)
+                    </button>
+                </div>
             </div>
-        </main>
+
+            <div class="border-t border-slate-800 pt-4 flex flex-col md:flex-row items-center gap-4 justify-between">
+                <div class="w-full md:w-1/2">
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Название виджета в списке</label>
+                    <input type="text" id="bw-name" value="Праздничный виджет" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white">
+                </div>
+                <button onclick="saveCustomWidget()" class="w-full md:w-auto bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition text-sm cursor-pointer flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-check"></i> Сохранить и добавить виджет
+                </button>
+            </div>
+        </div>
     </div>
+
+    <!-- МОДАЛЬНОЕ ОКНО РАСШИРЕНИЯ / ВЫТЯГИВАНИЯ ВИДЖЕТА -->
+    <div id="widget-resize-modal" class="hidden fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="bg-obs-card border border-obs-border rounded-2xl w-full max-w-xl p-6 shadow-2xl flex flex-col gap-5">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-arrows-split-up-and-left text-indigo-400"></i> Настройка размеров и пропорций
+                </h3>
+                <button onclick="closeWidgetResizeModal()" class="text-slate-400 hover:text-white text-lg cursor-pointer">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <p class="text-xs text-slate-400">Тяните за стрелочки: боковые стрелки расширяют виджет по ширине, а верхняя/нижняя — вытягивают по высоте.</p>
+
+            <div class="relative bg-black/80 border border-slate-800 rounded-xl h-[300px] flex items-center justify-center overflow-hidden select-none">
+                <div id="resize-frame-box" class="relative border-2 border-indigo-500 bg-indigo-950/20 p-4 rounded-xl flex flex-col items-center justify-center shadow-2xl transition-all" style="width: 260px; height: 160px;">
+                    <div onmousedown="startCustomResize('top', event)" class="absolute -top-3 left-1/2 -translate-x-1/2 w-6 h-6 bg-indigo-600 hover:bg-indigo-500 rounded-full flex items-center justify-center text-white text-[10px] cursor-ns-resize shadow"><i class="fa-solid fa-arrow-up"></i></div>
+                    <div onmousedown="startCustomResize('bottom', event)" class="absolute -bottom-3 left-1/2 -translate-x-1/2 w-6 h-6 bg-indigo-600 hover:bg-indigo-500 rounded-full flex items-center justify-center text-white text-[10px] cursor-ns-resize shadow"><i class="fa-solid fa-arrow-down"></i></div>
+                    <div onmousedown="startCustomResize('left', event)" class="absolute top-1/2 -left-3 -translate-y-1/2 w-6 h-6 bg-indigo-600 hover:bg-indigo-500 rounded-full flex items-center justify-center text-white text-[10px] cursor-ew-resize shadow"><i class="fa-solid fa-arrow-left"></i></div>
+                    <div onmousedown="startCustomResize('right', event)" class="absolute top-1/2 -right-3 -translate-y-1/2 w-6 h-6 bg-indigo-600 hover:bg-indigo-500 rounded-full flex items-center justify-center text-white text-[10px] cursor-ew-resize shadow"><i class="fa-solid fa-arrow-right"></i></div>
+
+                    <div id="resize-frame-content" class="w-full h-full flex items-center justify-center overflow-hidden"></div>
+                </div>
+            </div>
+
+            <div class="flex justify-between items-center border-t border-slate-800 pt-4">
+                <span class="text-xs text-slate-400 font-mono" id="resize-dims-label">Ширина: 260px | Высота: 160px</span>
+                <button onclick="closeWidgetResizeModal()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-6 rounded-xl shadow-lg transition text-xs cursor-pointer">
+                    Применить размер
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
     <script>
         const FIREBASE_DB_URL = "https://alfanik-ac5d7-default-rtdb.firebaseio.com/obs_state.json";
-        const isOverlayMode = new URLSearchParams(window.location.search).has('mode');
-        let elementsState = {};
-        let lastCloudStateJson = '';
-        let activeLiveTextId = null;
-        let draggedId = null;
-        let dragOffsetX = 0;
-        let dragOffsetY = 0;
 
-        if (isOverlayMode) {
-            document.getElementById('obs-overlay-view').classList.remove('hidden');
-            document.getElementById('control-panel-view').remove();
-            
-            // Защищенный опрос Firebase специально для OBS без CORS ограничений через JSONP / No-Cors fallback
-            setInterval(pollCloudForOBS, 1000);
-            pollCloudForOBS();
-        } else {
-            initControlPanel();
-            setInterval(fetchStateFromCloud, 1500);
-            fetchStateFromCloud();
-        }
+        let activeOverlays = [];
+        let customWidgetsList = JSON.parse(localStorage.getItem('obs_custom_widgets') || '[]');
+        let liveTextItemId = null;
+
+        let isDragging = false;
+        let lastDragBroadcastAt = 0;
+        let dragTargetId = null;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let elementStartX = 0;
+        let elementStartY = 0;
+        let lastCloudString = "";
+        let builderMediaSrc = "";
+        let builderMediaType = "image";
+
+        let builderWidgetWidth = 260;
+        let builderWidgetHeight = 160;
+        let isResizingWidgetBox = false;
+        let resizeDir = '';
+        let startMouseX = 0;
+        let startMouseY = 0;
+        let startW = 260;
+        let startH = 160;
+
+        window.onload = function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const modeParam = urlParams.get('mode');
+
+            renderCustomWidgetsMenu();
+
+            if (modeParam === 'overlay') {
+                switchView('overlay');
+                setInterval(fetchStateFromCloud, 100);
+                fetchStateFromCloud();
+            } else {
+                switchView('operator');
+                ensureLiveTextItem();
+                setInterval(() => {
+                    if (!isDragging) fetchStateFromCloud();
+                }, 2000);
+                fetchStateFromCloud();
+            }
+
+            window.addEventListener('mousemove', handleGlobalMouseMove);
+            window.addEventListener('mouseup', handleGlobalMouseUp);
+            window.addEventListener('touchmove', handleGlobalTouchMove, { passive: false });
+            window.addEventListener('touchend', handleGlobalMouseUp);
+
+            const previewContainer = document.getElementById('preview-container');
+            if (previewContainer) {
+                previewContainer.addEventListener('wheel', handleCanvasWheel, { passive: false });
+            }
+        };
 
         function saveAndBroadcast() {
-            const stateJson = JSON.stringify(elementsState);
-            lastCloudStateJson = stateJson;
+            const cleanOverlays = activeOverlays.map(item => ({
+                id: item.id,
+                type: item.type,
+                content: item.content,
+                url: item.url,
+                font: item.font,
+                size: item.size,
+                color: item.color,
+                effect: item.effect,
+                bgStyle: item.bgStyle,
+                anim: item.anim,
+                scale: item.scale || 1,
+                width: item.width || 'auto',
+                height: item.height || 'auto',
+                x: item.x,
+                y: item.y,
+                hidden: item.hidden,
+                html: item.html,
+                title: item.title,
+                volume: item.volume
+            }));
+
+            const jsonString = JSON.stringify(cleanOverlays);
+            lastCloudString = jsonString;
+            
             fetch(FIREBASE_DB_URL, {
                 method: 'PUT',
-                body: stateJson,
+                body: jsonString,
                 headers: { 'Content-Type': 'application/json' }
-            }).then(() => {
-                if (!isOverlayMode) {
-                    updatePreviewCanvas();
-                    updateActiveList();
-                }
             }).catch(err => console.error("Ошибка сохранения:", err));
         }
 
         function fetchStateFromCloud() {
-            if (isOverlayMode || draggedId) return;
+            if (isDragging) return;
+
             fetch(FIREBASE_DB_URL, { cache: 'no-store' })
                 .then(res => res.json())
                 .then(data => {
-                    const nextState = data && typeof data === 'object' ? data : {};
-                    const nextJson = JSON.stringify(nextState);
-                    if (nextJson === lastCloudStateJson) return;
+                    let newData = [];
+                    if (data && Array.isArray(data)) newData = data;
+                    else if (data && typeof data === 'object') newData = Object.values(data);
 
-                    lastCloudStateJson = nextJson;
-                    elementsState = nextState;
-                    updatePreviewCanvas();
-                    updateActiveList();
+                    const newString = JSON.stringify(newData);
+                    if (newString !== lastCloudString) {
+                        const positionsOnlyChanged = JSON.stringify(newData.map(({ x, y, ...item }) => item)) ===
+                            JSON.stringify(activeOverlays.map(({ x, y, ...item }) => item));
+                        lastCloudString = newString;
+                        activeOverlays = newData;
+                        if (positionsOnlyChanged) {
+                            updateOverlayPositions();
+                        } else {
+                            renderOverlaysSmart();
+                        }
+                    }
                 })
                 .catch(err => console.error("Ошибка загрузки:", err));
         }
 
-        // Специальная функция для OBS, использующая режим no-cors / JSONP симуляцию
-        function pollCloudForOBS() {
-            fetch(FIREBASE_DB_URL, { cache: 'no-store' })
-                .then(res => res.json())
-                .then(data => {
-                    if (data && typeof data === 'object') {
-                        renderOverlayElements(data);
-                    }
-                })
-                .catch(() => {
-                    // Резервный метод через скрипт-тег если стандартный fetch заблокирован в OBS
-                    const script = document.createElement('script');
-                    script.src = `${FIREBASE_DB_URL}?callback=handleObsData&_=${Date.now()}`;
-                    document.body.appendChild(script);
+        function updateOverlayPositions() {
+            activeOverlays.forEach(item => {
+                [document.getElementById('obs-render-canvas'), document.getElementById('operator-overlay-canvas')]
+                    .forEach(canvas => {
+                        const node = canvas && canvas.querySelector(`[data-id="${item.id}"]`);
+                        if (node) {
+                            node.style.left = item.x + '%';
+                            node.style.top = item.y + '%';
+                        }
+                    });
+            });
+            renderActiveElementsList(document.getElementById('active-elements-list'));
+        }
+
+        function switchView(mode) {
+            const header = document.getElementById('main-header');
+            const viewOp = document.getElementById('view-operator');
+            const viewOv = document.getElementById('view-overlay');
+
+            if (mode === 'overlay') {
+                document.body.classList.add('obs-overlay-mode');
+                header.classList.add('hidden');
+                viewOp.classList.add('hidden');
+                viewOv.classList.remove('hidden');
+            } else {
+                document.body.classList.remove('obs-overlay-mode');
+                header.classList.remove('hidden');
+                viewOp.classList.remove('hidden');
+                viewOv.classList.add('hidden');
+            }
+        }
+
+        function ensureLiveTextItem() {
+            if (!liveTextItemId || !activeOverlays.find(i => i.id === liveTextItemId)) {
+                const textVal = document.getElementById('text-input').value;
+                const newItem = {
+                    id: 'live_text_' + Date.now(),
+                    type: 'text',
+                    content: textVal,
+                    font: document.getElementById('text-font').value,
+                    size: document.getElementById('text-size').value,
+                    color: document.getElementById('text-color').value,
+                    effect: document.getElementById('text-effect').value,
+                    bgStyle: document.getElementById('text-bg-style').value,
+                    anim: document.getElementById('global-anim-select').value,
+                    scale: 1,
+                    x: 50,
+                    y: 50,
+                    hidden: false
+                };
+                liveTextItemId = newItem.id;
+                activeOverlays.push(newItem);
+                saveAndBroadcast();
+            }
+        }
+
+        function onLiveTextTyping() {
+            ensureLiveTextItem();
+            const textVal = document.getElementById('text-input').value;
+            const item = activeOverlays.find(i => i.id === liveTextItemId);
+            if (item) {
+                item.content = textVal;
+                const node = document.querySelector(`[data-id="${item.id}"] .text-content`);
+                if (node) node.innerText = textVal;
+            }
+        }
+
+        function onLiveTextStyleChange() {
+            ensureLiveTextItem();
+            const item = activeOverlays.find(i => i.id === liveTextItemId);
+            if (item) {
+                item.font = document.getElementById('text-font').value;
+                item.size = document.getElementById('text-size').value;
+                item.color = document.getElementById('text-color').value;
+                item.effect = document.getElementById('text-effect').value;
+                item.bgStyle = document.getElementById('text-bg-style').value;
+                item.anim = document.getElementById('global-anim-select').value;
+                document.getElementById('text-color-hex').innerText = item.color;
+                renderOverlays();
+            }
+        }
+
+        function onGlobalAnimChange() {
+            const anim = document.getElementById('global-anim-select').value;
+            if (liveTextItemId) {
+                const item = activeOverlays.find(i => i.id === liveTextItemId);
+                if (item) {
+                    item.anim = anim;
+                    saveAndBroadcast();
+                }
+            }
+        }
+
+        function createNewTextOverlay() {
+            const textVal = document.getElementById('text-input').value || 'Новый текст';
+            const newItem = {
+                id: 'text_' + Date.now(),
+                type: 'text',
+                content: textVal,
+                font: document.getElementById('text-font').value,
+                size: document.getElementById('text-size').value,
+                color: document.getElementById('text-color').value,
+                effect: document.getElementById('text-effect').value,
+                bgStyle: document.getElementById('text-bg-style').value,
+                anim: document.getElementById('global-anim-select').value,
+                scale: 1,
+                x: 50,
+                y: 40 + (Math.random() * 15),
+                hidden: false
+            };
+            liveTextItemId = newItem.id;
+            activeOverlays.push(newItem);
+            saveAndBroadcast();
+            renderOverlays();
+            showToast('Текстовый блок создан');
+        }
+
+        function handleImageFileUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                activeOverlays.push({
+                    id: 'img_' + Date.now(),
+                    type: 'image',
+                    url: evt.target.result,
+                    anim: document.getElementById('global-anim-select').value,
+                    scale: 1,
+                    x: 50,
+                    y: 50,
+                    hidden: false
                 });
+                saveAndBroadcast();
+                renderOverlays();
+                showToast('Изображение загружено');
+            };
+            reader.readAsDataURL(file);
         }
 
-        window.handleObsData = function(data) {
-            if (data && typeof data === 'object') {
-                renderOverlayElements(data);
-            }
-        };
-
-        function renderOverlayElements(state) {
-            const container = document.getElementById('active-elements-container');
-            if (!container) return;
-
-            const visibleItems = Object.entries(state).filter(([, el]) => el && !el.hidden);
-            const visibleIds = new Set(visibleItems.map(([id, el]) => String(el.id || id)));
-
-            Array.from(container.children).forEach(node => {
-                if (!visibleIds.has(node.dataset.id)) node.remove();
+        function sendImageUrlOverlay() {
+            const url = document.getElementById('image-url-input').value.trim();
+            if (!url) return showToast('Укажите URL картинки', 'warning');
+            activeOverlays.push({
+                id: 'img_' + Date.now(),
+                type: 'image',
+                url: url,
+                anim: document.getElementById('global-anim-select').value,
+                scale: 1,
+                x: 50,
+                y: 50,
+                hidden: false
             });
-
-            visibleItems.forEach(([key, el]) => {
-                const id = String(el.id || key);
-                let div = Array.from(container.children).find(node => node.dataset.id === id);
-                if (!div) {
-                    div = document.createElement('div');
-                    div.dataset.id = id;
-                    container.appendChild(div);
-                }
-
-                const animClass = el.anim === 'fade' ? 'anim-fade' : el.anim === 'zoom' ? 'anim-zoom' : el.anim === 'slide' ? 'anim-slide' : 'anim-none';
-                if (div.dataset.anim !== animClass) {
-                    div.className = `absolute transform -translate-x-1/2 -translate-y-1/2 ${animClass}`;
-                    div.dataset.anim = animClass;
-                }
-                div.style.left = (Number(el.x) || 0) + '%';
-                div.style.top = (Number(el.y) || 0) + '%';
-
-                const contentKey = JSON.stringify([el.type, el.url, el.content, el.size, el.color, el.html]);
-                if (div.dataset.contentKey !== contentKey) {
-                    if (el.type === 'text') {
-                        div.innerHTML = `<div style="font-size: ${el.size}px; color: ${el.color}; background: transparent; text-shadow: 2px 2px 4px rgba(0,0,0,0.9), -1px -1px 0 rgba(0,0,0,0.8); font-weight: bold; white-space: pre-wrap;">${escapeHtml(el.content || '')}</div>`;
-                    } else if (el.type === 'image') {
-                        div.innerHTML = `<img src="${escapeHtml(el.url || '')}" style="max-width: 400px; height: auto;" />`;
-                    } else if (el.type === 'video') {
-                        div.innerHTML = `<video src="${escapeHtml(el.url || '')}" autoplay loop playsinline style="max-width: 500px;"></video>`;
-                    } else if (el.type === 'widget') {
-                        div.innerHTML = el.html || '';
-                    }
-                    div.dataset.contentKey = contentKey;
-                }
-
-                if (el.type === 'video') {
-                    const video = div.querySelector('video');
-                    if (video && Number.isFinite(Number(el.volume))) video.volume = Number(el.volume);
-                }
-            });
-        }
-
-        function initControlPanel() {
-            updateTwitchPreview();
-            setupDragAndDropOnPreview();
-        }
-
-        function switchTab(tab) {
-            ['text', 'image', 'video', 'widgets'].forEach(t => {
-                const el = document.getElementById(`tab-content-${t}`);
-                const btn = document.getElementById(`tab-btn-${t}`);
-                if (el) el.classList.add('hidden');
-                if (btn) btn.className = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-800 text-gray-400 hover:text-white transition';
-            });
-            const activeEl = document.getElementById(`tab-content-${tab}`);
-            const activeBtn = document.getElementById(`tab-btn-${tab}`);
-            if (activeEl) activeEl.classList.remove('hidden');
-            if (activeBtn) activeBtn.className = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white transition';
-        }
-
-        function updateTwitchPreview() {
-            const type = document.getElementById('preview-source-type').value;
-            const container = document.getElementById('twitch-embed-container');
-            const channelName = document.getElementById('twitch-channel-input').value.trim() || 'dell11q';
-            
-            if (type === 'twitch') {
-                const parentDomain = window.location.hostname || 'localhost';
-                container.innerHTML = `<iframe src="https://player.twitch.tv/?channel=${channelName}&parent=${parentDomain}&muted=true" height="100%" width="100%" frameborder="0" scrolling="no" allowfullscreen="true"></iframe>`;
-            } else {
-                container.innerHTML = `<div class="w-full h-full bg-gradient-to-br from-indigo-900 via-purple-900 to-gray-900 flex items-center justify-center text-gray-400 text-sm">Тестовый фон потока</div>`;
-            }
-        }
-
-        function liveUpdateText() {
-            const content = document.getElementById('text-input').value;
-            const size = document.getElementById('text-size').value;
-            const color = document.getElementById('text-color').value;
-            const anim = document.getElementById('global-animation').value;
-
-            if (!activeLiveTextId || !elementsState[activeLiveTextId]) {
-                activeLiveTextId = 'text_' + Date.now();
-                elementsState[activeLiveTextId] = { id: activeLiveTextId, type: 'text', content, size, color, anim, x: 50, y: 50, hidden: false };
-            } else {
-                elementsState[activeLiveTextId].content = content;
-                elementsState[activeLiveTextId].size = size;
-                elementsState[activeLiveTextId].color = color;
-                elementsState[activeLiveTextId].anim = anim;
-            }
+            document.getElementById('image-url-input').value = '';
             saveAndBroadcast();
+            renderOverlays();
+            showToast('Изображение отправлено');
         }
 
-        function createNewElement(type) {
-            activeLiveTextId = null;
-            document.getElementById('text-input').value = '';
+        function handleVideoFileUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                activeOverlays.push({
+                    id: 'vid_' + Date.now(),
+                    type: 'video',
+                    url: evt.target.result,
+                    volume: (parseInt(document.getElementById('video-volume').value) || 80) / 100,
+                    anim: document.getElementById('global-anim-select').value,
+                    scale: 1,
+                    x: 50,
+                    y: 50,
+                    hidden: false
+                });
+                saveAndBroadcast();
+                renderOverlays();
+                showToast('Видео файл загружен');
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function sendVideoUrlOverlay() {
+            const url = document.getElementById('video-url-input').value.trim();
+            if (!url) return showToast('Укажите URL видео', 'warning');
+            activeOverlays.push({
+                id: 'vid_' + Date.now(),
+                type: 'video',
+                url: url,
+                volume: (parseInt(document.getElementById('video-volume').value) || 80) / 100,
+                anim: document.getElementById('global-anim-select').value,
+                scale: 1,
+                x: 50,
+                y: 50,
+                hidden: false
+            });
+            document.getElementById('video-url-input').value = '';
             saveAndBroadcast();
-        }
-
-        function sendMediaElement(type) {
-            const urlInput = document.getElementById(`${type}-url-input`);
-            const anim = document.getElementById('global-animation').value;
-            
-            if (urlInput.value.trim() !== '') {
-                addElementToState({ type, url: urlInput.value.trim(), anim, hidden: false });
-                urlInput.value = '';
-            }
+            renderOverlays();
+            showToast('Видео отправлено');
         }
 
         function sendWidget(kind) {
-            const anim = document.getElementById('global-animation').value;
+            const anim = document.getElementById('global-anim-select').value;
             let html = '';
             let title = '';
 
             if (kind === 'telegram') {
                 title = 'Telegram: t.me/Dell11q';
-                html = `
-                    <div style="background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(10px); border: 2px solid rgba(56, 189, 248, 0.6); padding: 12px 24px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 12px;">
-                        <span style="font-size: 28px;">✈️</span>
-                        <div>
-                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #38bdf8; font-weight: bold;">Telegram канал</div>
-                            <div style="font-size: 20px; color: #ffffff; font-weight: bold;">t.me/Dell11q</div>
-                        </div>
-                    </div>
-                `;
+                html = `<div style="background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(12px); border: 2px solid rgba(56, 189, 248, 0.6); padding: 12px 24px; border-radius: 18px; box-shadow: 0 10px 25px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 14px;"><span style="font-size: 28px;">✈️</span><div><div style="font-size: 11px; text-transform: uppercase; color: #38bdf8; font-weight: bold;">Telegram канал</div><div style="font-size: 20px; color: #ffffff; font-weight: 800;">t.me/Dell11q</div></div></div>`;
             } else if (kind === 'follow') {
                 title = 'Напоминание: Фоллоу';
-                html = `
-                    <div style="background: rgba(49, 10, 101, 0.9); backdrop-filter: blur(10px); border: 2px solid rgba(168, 85, 247, 0.6); padding: 12px 24px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 12px;">
-                        <span style="font-size: 28px;">💜</span>
-                        <div>
-                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #c084fc; font-weight: bold;">Поддержи стримера</div>
-                            <div style="font-size: 20px; color: #ffffff; font-weight: bold;">Прожми фоллоу!</div>
-                        </div>
-                    </div>
-                `;
+                html = `<div style="background: rgba(49, 10, 101, 0.9); backdrop-filter: blur(12px); border: 2px solid rgba(168, 85, 247, 0.6); padding: 12px 24px; border-radius: 18px; box-shadow: 0 10px 25px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 14px;"><span style="font-size: 28px;">💜</span><div><div style="font-size: 11px; text-transform: uppercase; color: #c084fc; font-weight: bold;">Поддержи стримера</div><div style="font-size: 20px; color: #ffffff; font-weight: 800;">Прожми фоллоу!</div></div></div>`;
             } else if (kind === 'donate') {
                 title = 'Напоминание: Донат';
-                html = `
-                    <div style="background: rgba(120, 53, 15, 0.9); backdrop-filter: blur(10px); border: 2px solid rgba(251, 146, 60, 0.6); padding: 12px 24px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 12px;">
-                        <span style="font-size: 28px;">💰</span>
-                        <div>
-                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #fb923c; font-weight: bold;">Поддержать рублём</div>
-                            <div style="font-size: 20px; color: #ffffff; font-weight: bold;">Ссылка в описании</div>
-                        </div>
-                    </div>
-                `;
+                html = `<div style="background: rgba(120, 53, 15, 0.9); backdrop-filter: blur(12px); border: 2px solid rgba(251, 146, 60, 0.6); padding: 12px 24px; border-radius: 18px; box-shadow: 0 10px 25px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 14px;"><span style="font-size: 28px;">💰</span><div><div style="font-size: 11px; text-transform: uppercase; color: #fb923c; font-weight: bold;">Поддержать рублём</div><div style="font-size: 20px; color: #ffffff; font-weight: 800;">Ссылка в описании</div></div></div>`;
             }
 
-            addElementToState({ type: 'widget', html, title, anim, hidden: false });
-        }
-
-        function addElementToState(data) {
-            const id = data.type + '_' + Date.now();
-            elementsState[id] = { id, x: 50, y: 50, ...data };
+            activeOverlays.push({
+                id: 'widget_' + Date.now(),
+                type: 'widget',
+                title: title,
+                html: html,
+                anim: anim,
+                scale: 1,
+                width: '280px',
+                height: 'auto',
+                x: 50,
+                y: 50,
+                hidden: false
+            });
             saveAndBroadcast();
+            renderOverlays();
+            showToast('Виджет добавлен на экран');
         }
 
-        function updatePreviewCanvas() {
-            const layer = document.getElementById('preview-elements-layer');
-            if (!layer) return;
-
-            const items = Object.entries(elementsState).filter(([, el]) => !!el);
-            const ids = new Set(items.map(([id, el]) => String(el.id || id)));
-            Array.from(layer.children).forEach(node => {
-                if (!ids.has(node.dataset.id)) node.remove();
-            });
-
-            items.forEach(([key, el]) => {
-                const id = String(el.id || key);
-                let div = Array.from(layer.children).find(node => node.dataset.id === id);
-                if (!div) {
-                    div = document.createElement('div');
-                    div.dataset.id = id;
-                    layer.appendChild(div);
-                }
-
-                const className = `absolute transform -translate-x-1/2 -translate-y-1/2 cursor-move border ${el.hidden ? 'border-dashed border-red-500/50 opacity-40' : 'border-indigo-500/40 hover:border-indigo-400'} p-1 rounded bg-black/40 backdrop-blur pointer-events-auto transition-opacity`;
-                if (div.className !== className) div.className = className;
-                div.style.left = (Number(el.x) || 0) + '%';
-                div.style.top = (Number(el.y) || 0) + '%';
-
-                const contentKey = JSON.stringify([el.type, el.url, el.content, el.size, el.color, el.html]);
-                if (div.dataset.contentKey !== contentKey) {
-                    if (el.type === 'text') {
-                        div.innerHTML = `<span style="font-size: ${Math.max(12, (Number(el.size) || 24)/2.5)}px; color: ${el.color}; font-weight: bold;">${escapeHtml(el.content || '')}</span>`;
-                    } else if (el.type === 'image') {
-                        div.innerHTML = `<img src="${escapeHtml(el.url || '')}" class="max-h-20 pointer-events-none" />`;
-                    } else if (el.type === 'video') {
-                        div.innerHTML = `<video src="${escapeHtml(el.url || '')}" class="max-h-20 pointer-events-none" autoplay loop muted playsinline></video>`;
-                    } else if (el.type === 'widget') {
-                        div.innerHTML = `<div class="scale-50 origin-center pointer-events-none">${el.html || ''}</div>`;
-                    }
-                    div.dataset.contentKey = contentKey;
-                }
-            });
+        function openWidgetBuilderModal() {
+            document.getElementById('widget-builder-modal').classList.remove('hidden');
+            updateBuilderPreview();
         }
 
-        function updateActiveList() {
-            const list = document.getElementById('active-elements-list');
-            if (!list) return;
-            list.innerHTML = '';
+        function closeWidgetBuilderModal() {
+            document.getElementById('widget-builder-modal').classList.add('hidden');
+        }
+
+        function handleBuilderFile(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            builderMediaType = file.type.startsWith('video') ? 'video' : 'image';
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                builderMediaSrc = evt.target.result;
+                document.getElementById('bw-url').value = '';
+                updateBuilderPreview();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function updateBuilderPreview() {
+            const urlVal = document.getElementById('bw-url').value.trim();
+            const mediaSrc = urlVal || builderMediaSrc;
+            const textVal = document.getElementById('bw-text').value;
+            const colorVal = document.getElementById('bw-color').value;
+            const bgToggle = document.getElementById('bw-bg-toggle').value;
+
+            const prevBox = document.getElementById('builder-preview-box');
+            prevBox.style.width = builderWidgetWidth + 'px';
+            prevBox.style.height = builderWidgetHeight + 'px';
             
-            const keys = Object.keys(elementsState);
-            if (keys.length === 0) {
-                list.innerHTML = '<span class="text-xs text-gray-500 italic">Нет активных элементов</span>';
+            if (bgToggle === 'solid') {
+                prevBox.style.background = 'rgba(15, 23, 42, 0.95)';
+                prevBox.style.border = `2px solid ${colorVal}`;
+            } else {
+                prevBox.style.background = 'transparent';
+                prevBox.style.border = 'none';
+            }
+
+            const prevMedia = document.getElementById('bw-prev-media');
+            if (mediaSrc) {
+                if (builderMediaType === 'video' || urlVal.endsWith('.mp4') || urlVal.endsWith('.webm')) {
+                    prevMedia.innerHTML = `<video src="${mediaSrc}" autoplay loop muted style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;"></video>`;
+                } else {
+                    prevMedia.innerHTML = `<img src="${mediaSrc}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;">`;
+                }
+            } else {
+                prevMedia.innerHTML = `<div class="text-slate-500 text-xs p-4">Медиа не выбрано</div>`;
+            }
+
+            document.getElementById('bw-prev-text').innerText = textVal;
+        }
+
+        function openWidgetResizeModal() {
+            document.getElementById('widget-resize-modal').classList.remove('hidden');
+            updateResizeFramePreview();
+        }
+
+        function closeWidgetResizeModal() {
+            document.getElementById('widget-resize-modal').classList.add('hidden');
+            updateBuilderPreview();
+        }
+
+        function updateResizeFramePreview() {
+            const urlVal = document.getElementById('bw-url').value.trim();
+            const mediaSrc = urlVal || builderMediaSrc;
+            const textVal = document.getElementById('bw-text').value;
+            const colorVal = document.getElementById('bw-color').value;
+            const bgToggle = document.getElementById('bw-bg-toggle').value;
+
+            const frameBox = document.getElementById('resize-frame-box');
+            frameBox.style.width = builderWidgetWidth + 'px';
+            frameBox.style.height = builderWidgetHeight + 'px';
+
+            if (bgToggle === 'solid') {
+                frameBox.style.background = 'rgba(15, 23, 42, 0.95)';
+                frameBox.style.border = `2px solid ${colorVal}`;
+            } else {
+                frameBox.style.background = 'transparent';
+                frameBox.style.border = 'none';
+            }
+
+            const content = document.getElementById('resize-frame-content');
+            if (mediaSrc) {
+                content.innerHTML = `<img src="${mediaSrc}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;">`;
+            } else {
+                content.innerHTML = `<div class="text-slate-400 text-xs">${textVal || 'Медиа'}</div>`;
+            }
+
+            document.getElementById('resize-dims-label').innerText = `Ширина: ${builderWidgetWidth}px | Высота: ${builderWidgetHeight}px`;
+        }
+
+        function startCustomResize(dir, e) {
+            e.preventDefault();
+            isResizingWidgetBox = true;
+            resizeDir = dir;
+            startMouseX = e.clientX;
+            startMouseY = e.clientY;
+            startW = builderWidgetWidth;
+            startH = builderWidgetHeight;
+        }
+
+        function saveCustomWidget() {
+            const name = document.getElementById('bw-name').value.trim() || 'Мой виджет';
+            const urlVal = document.getElementById('bw-url').value.trim();
+            const mediaSrc = urlVal || builderMediaSrc;
+            const text = document.getElementById('bw-text').value;
+            const vol = (parseInt(document.getElementById('bw-vol').value) || 80) / 100;
+            const anim = document.getElementById('bw-anim').value;
+            const color = document.getElementById('bw-color').value;
+            const bgToggle = document.getElementById('bw-bg-toggle').value;
+
+            let bgStyle = bgToggle === 'solid' ? `background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); border: 2px solid ${color}; padding: 12px; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.7);` : 'padding: 4px;';
+
+            let mediaTag = '';
+            if (mediaSrc) {
+                if (builderMediaType === 'video' || urlVal.endsWith('.mp4') || urlVal.endsWith('.webm')) {
+                    mediaTag = `<video src="${mediaSrc}" autoplay loop playsinline style="width: 100%; height: 100%; object-fit: cover; border-radius: 10px;" onloadedmetadata="this.volume=${vol};"></video>`;
+                } else {
+                    mediaTag = `<img src="${mediaSrc}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 10px;" />`;
+                }
+            }
+
+            const html = `
+                <div style="${bgStyle} width: ${builderWidgetWidth}px; height: ${builderWidgetHeight}px; display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center; text-align: center; overflow: hidden;">
+                    <div style="flex: 1; width: 100%; overflow: hidden; display: flex; align-items: center; justify-content: center;">${mediaTag}</div>
+                    ${text ? `<div style="font-size: 14px; color: #ffffff; font-weight: 800; text-shadow: 2px 2px 4px #000;">${escapeHtml(text)}</div>` : ''}
+                </div>
+            `;
+
+            const newCustomWidget = { id: 'cw_' + Date.now(), name, html, anim, scale: 1 };
+            customWidgetsList.push(newCustomWidget);
+            localStorage.setItem('obs_custom_widgets', JSON.stringify(customWidgetsList));
+
+            renderCustomWidgetsMenu();
+            closeWidgetBuilderModal();
+            showToast('Виджет успешно сохранен!');
+        }
+
+        function renderCustomWidgetsMenu() {
+            const container = document.getElementById('custom-widgets-container');
+            if (!container) return;
+            if (customWidgetsList.length === 0) {
+                container.innerHTML = '';
                 return;
             }
 
-            keys.forEach(id => {
-                const el = elementsState[id];
-                if (!el) return;
-                const row = document.createElement('div');
-                row.className = 'flex items-center justify-between bg-gray-800/80 px-3 py-2 rounded-xl text-xs';
-                row.innerHTML = `
-                    <span class="truncate max-w-[180px] text-gray-300 ${el.hidden ? 'line-through text-gray-500' : ''}">${el.type.toUpperCase()}: ${el.title || el.content || (el.url ? el.url.substring(0, 15) : '')}</span>
-                    <div class="flex items-center space-x-2">
-                        <button onclick="toggleVisibility('${id}')" class="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-gray-200 transition cursor-pointer" title="Скрыть/Показать">
-                            ${el.hidden ? '👁️‍🗨️ Скрыт' : '👁️ Глаз'}
-                        </button>
-                        <button onclick="removeElement('${id}')" class="text-red-400 hover:text-red-300 cursor-pointer">Удалить</button>
-                    </div>
-                `;
-                list.appendChild(row);
-            });
+            container.innerHTML = customWidgetsList.map(w => `
+                <div class="flex items-center justify-between bg-slate-900 border border-slate-700 p-2.5 rounded-xl text-xs">
+                    <button onclick="sendCustomWidget('${w.id}')" class="flex-1 text-left font-semibold text-indigo-300 hover:text-indigo-200 truncate mr-2 cursor-pointer">
+                        ⭐ ${escapeHtml(w.name)}
+                    </button>
+                    <button onclick="deleteCustomWidget('${w.id}')" class="text-slate-400 hover:text-red-400 p-1" title="Удалить виджет">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            `).join('');
         }
 
-        function toggleVisibility(id) {
-            if (elementsState[id]) {
-                elementsState[id].hidden = !elementsState[id].hidden;
-                saveAndBroadcast();
+        function sendCustomWidget(id) {
+            const w = customWidgetsList.find(item => item.id === id);
+            if (!w) return;
+            activeOverlays.push({
+                id: 'custom_widget_' + Date.now(),
+                type: 'widget',
+                title: w.name,
+                html: w.html,
+                anim: w.anim,
+                scale: 1,
+                x: 50,
+                y: 50,
+                hidden: false
+            });
+            saveAndBroadcast();
+            renderOverlays();
+            showToast(`Виджет "${w.name}" выведен на экран`);
+        }
+
+        function deleteCustomWidget(id) {
+            customWidgetsList = customWidgetsList.filter(item => item.id !== id);
+            localStorage.setItem('obs_custom_widgets', JSON.stringify(customWidgetsList));
+            renderCustomWidgetsMenu();
+            showToast('Виджет удален из списка');
+        }
+
+        function handleCanvasWheel(e) {
+            const target = e.target.closest('[data-id]');
+            if (!target) return;
+            e.preventDefault();
+            const itemId = target.dataset.id;
+            const item = activeOverlays.find(i => i.id === itemId);
+            if (!item) return;
+
+            if (!item.scale) item.scale = 1;
+            if (e.deltaY < 0) {
+                item.scale = Math.min(item.scale + 0.1, 3);
+            } else {
+                item.scale = Math.max(item.scale - 0.1, 0.3);
+            }
+
+            target.style.transform = `translate3d(-50%, -50%, 0) scale(${item.scale})`;
+            saveAndBroadcast();
+        }
+
+        // --- ПЛАВНОЕ ПЕРЕТАСКИВАНИЕ В РЕАЛЬНОМ ВРЕМЕНИ БЕЗ СБРОСА ВИДЕО ---
+        function startDrag(e, itemId) {
+            e.preventDefault();
+            isDragging = true;
+            dragTargetId = itemId;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            dragStartX = clientX;
+            dragStartY = clientY;
+
+            const item = activeOverlays.find(i => i.id === itemId);
+            if (item) {
+                elementStartX = item.x;
+                elementStartY = item.y;
             }
         }
 
-        function removeElement(id) {
-            if (id === activeLiveTextId) activeLiveTextId = null;
-            delete elementsState[id];
+        function handleGlobalMouseMove(e) {
+            const clientX = e.clientX;
+            const clientY = e.clientY;
+
+            if (isResizingWidgetBox) {
+                const deltaX = clientX - startMouseX;
+                const deltaY = clientY - startMouseY;
+
+                if (resizeDir === 'right') builderWidgetWidth = Math.max(120, Math.min(600, startW + deltaX));
+                if (resizeDir === 'left') builderWidgetWidth = Math.max(120, Math.min(600, startW - deltaX));
+                if (resizeDir === 'bottom') builderWidgetHeight = Math.max(80, Math.min(500, startH + deltaY));
+                if (resizeDir === 'top') builderWidgetHeight = Math.max(80, Math.min(500, startH - deltaY));
+
+                updateResizeFramePreview();
+                return;
+            }
+
+            if (!isDragging || !dragTargetId) return;
+            const container = document.getElementById('preview-container');
+            if (!container) return;
+
+            const rect = container.getBoundingClientRect();
+            const deltaX = clientX - dragStartX;
+            const deltaY = clientY - dragStartY;
+
+            const deltaPercentX = (deltaX / rect.width) * 100;
+            const deltaPercentY = (deltaY / rect.height) * 100;
+
+            let newX = Math.min(Math.max(elementStartX + deltaPercentX, 5), 95);
+            let newY = Math.min(Math.max(elementStartY + deltaPercentY, 5), 95);
+
+            const item = activeOverlays.find(i => i.id === dragTargetId);
+            if (item) {
+                item.x = newX;
+                item.y = newY;
+
+                // Двигаем DOM-элемент напрямую без пересоздания внутренностей (видео не перезапускается!)
+                const targetNode = container.querySelector(`[data-id="${dragTargetId}"]`);
+                if (targetNode) {
+                    targetNode.style.left = newX + '%';
+                    targetNode.style.top = newY + '%';
+                }
+
+                const now = Date.now();
+                if (now - lastDragBroadcastAt >= 100) {
+                    lastDragBroadcastAt = now;
+                    saveAndBroadcast();
+                }
+            }
+        }
+
+        function handleGlobalTouchMove(e) {
+            if (!isDragging && !isResizingWidgetBox) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            handleGlobalMouseMove({ clientX: touch.clientX, clientY: touch.clientY });
+        }
+
+        function handleGlobalMouseUp() {
+            if (isResizingWidgetBox) {
+                isResizingWidgetBox = false;
+                resizeDir = '';
+            }
+            if (isDragging) {
+                isDragging = false;
+                dragTargetId = null;
+                saveAndBroadcast(); // Координаты улетают в облако ровно в момент отпускания мышки
+            }
+        }
+
+        function onStreamProviderChange() {
+            const provider = document.getElementById('stream-provider').value;
+            const channelName = document.getElementById('twitch-channel-input').value.trim() || 'dell11q';
+            const bgHolder = document.getElementById('preview-bg-holder');
+
+            if (provider === 'twitch') {
+                const host = window.location.hostname || 'localhost';
+                bgHolder.innerHTML = `<iframe src="https://player.twitch.tv/?channel=${channelName}&parent=${host}&muted=true" class="w-full h-full border-0 pointer-events-auto"></iframe>`;
+            } else if (provider === 'screenshot') {
+                bgHolder.innerHTML = `<img src="https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1280&q=80" class="w-full h-full object-cover opacity-60">`;
+            } else if (provider === 'testvideo') {
+                bgHolder.innerHTML = `<video src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4" autoplay loop muted class="w-full h-full object-cover opacity-50"></video>`;
+            }
+        }
+
+        function uploadCustomBackground(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                document.getElementById('stream-provider').value = 'screenshot';
+                document.getElementById('preview-bg-holder').innerHTML = `<img src="${evt.target.result}" class="w-full h-full object-cover">`;
+                showToast('Фон предпросмотра обновлен');
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function renderOverlays() {
+            const obsCanvas = document.getElementById('obs-render-canvas');
+            const operatorCanvas = document.getElementById('operator-overlay-canvas');
+            const activeList = document.getElementById('active-elements-list');
+            const badge = document.getElementById('active-count-badge');
+
+            if (badge) badge.innerText = activeOverlays.length;
+
+            if (obsCanvas) obsCanvas.innerHTML = '';
+            if (operatorCanvas) operatorCanvas.innerHTML = '';
+
+            activeOverlays.forEach(item => {
+                if (item.hidden) return;
+
+                // Создаем узел для OBS оверлея
+                if (obsCanvas) {
+                    const obsNode = createOverlayElementNode(item, false);
+                    obsCanvas.appendChild(obsNode);
+                }
+
+                // Создаем интерактивный узел для пульта модератора
+                if (operatorCanvas) {
+                    const opNode = createOverlayElementNode(item, true);
+                    operatorCanvas.appendChild(opNode);
+                }
+            });
+
+            renderActiveElementsList(activeList);
+        }
+
+        function renderOverlaysSmart() {
+            // Умный рендер обновляет элементы из облака, не трогая те, которые сейчас перетаскиваются
+            if (isDragging) return;
+            renderOverlays();
+        }
+
+        function createOverlayElementNode(item, isInteractive) {
+            const node = document.createElement('div');
+            node.dataset.id = item.id;
+            const animClass = item.anim || 'anim-fade';
+            node.className = `absolute flex items-center justify-center ${animClass} ${isInteractive ? 'draggable-item pointer-events-auto cursor-move' : 'pointer-events-none'}`;
+            
+            node.style.left = item.x + '%';
+            node.style.top = item.y + '%';
+            const sc = item.scale || 1;
+            node.style.transform = `translate3d(-50%, -50%, 0) scale(${sc})`;
+            if (!isInteractive) node.style.transition = 'left 100ms linear, top 100ms linear';
+
+            if (isInteractive) {
+                node.onmousedown = (e) => startDrag(e, item.id);
+                node.ontouchstart = (e) => startDrag(e, item.id);
+            }
+
+            let contentHtml = '';
+            if (item.type === 'text') {
+                const fontStyle = `font-family: ${item.font}; color: ${item.color};`;
+                const effectClass = item.effect === 'text-outline-dark' ? 'text-outline-dark' : (item.effect === 'text-outline-glow' ? 'text-outline-glow' : '');
+                let bgClass = '';
+                if (item.bgStyle === 'dark') bgClass = 'bg-slate-950/90 border border-slate-700/80 px-6 py-4 rounded-2xl shadow-2xl backdrop-blur';
+                else if (item.bgStyle === 'indigo') bgClass = 'bg-indigo-900/90 border border-indigo-500/80 px-6 py-4 rounded-2xl shadow-2xl backdrop-blur';
+                else bgClass = 'px-4 py-2';
+
+                contentHtml = `<div class="${item.size} font-bold text-center tracking-wide ${effectClass} ${bgClass} text-content" style="${fontStyle}">${escapeHtml(item.content || '')}</div>`;
+            } else if (item.type === 'image') {
+                contentHtml = `<img src="${escapeHtml(item.url)}" class="max-w-[400px] h-auto rounded-2xl shadow-2xl object-contain">`;
+            } else if (item.type === 'video') {
+                // Видео рендерится один раз и больше не перезапускается при обновлениях интерфейса!
+                contentHtml = `<video src="${escapeHtml(item.url)}" autoplay loop playsinline class="max-w-[500px] rounded-2xl shadow-2xl" onloadedmetadata="this.volume=${item.volume || 0.8};"></video>`;
+            } else if (item.type === 'widget') {
+                contentHtml = item.html;
+            }
+
+            node.innerHTML = contentHtml;
+            return node;
+        }
+
+        function renderActiveElementsList(activeList) {
+            if (!activeList) return;
+            if (activeOverlays.length === 0) {
+                activeList.innerHTML = `
+                    <div id="empty-active-state" class="h-full flex flex-col items-center justify-center p-6 text-center text-slate-500 border border-dashed border-slate-700/60 rounded-xl">
+                        <i class="fa-solid fa-ghost text-3xl mb-2 text-slate-600"></i>
+                        <p class="text-xs">Экран пуст. Добавьте элемент справа.</p>
+                    </div>
+                `;
+            } else {
+                activeList.innerHTML = activeOverlays.map(item => `
+                    <div class="bg-slate-900 border border-slate-700 p-2.5 rounded-xl flex items-center justify-between text-xs transition hover:border-slate-600">
+                        <div class="flex items-center gap-3 overflow-hidden mr-2">
+                            <div class="w-7 h-7 rounded-lg bg-indigo-950 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold shrink-0">
+                                ${item.type === 'text' ? '<i class="fa-solid fa-font"></i>' : (item.type === 'image' ? '<i class="fa-solid fa-image"></i>' : (item.type === 'video' ? '<i class="fa-solid fa-video"></i>' : '<i class="fa-solid fa-shapes"></i>'))}
+                            </div>
+                            <div class="truncate">
+                                <div class="font-semibold text-slate-200 truncate ${item.hidden ? 'line-through text-slate-500' : ''}">${escapeHtml(item.title || item.content || item.url || 'Элемент')}</div>
+                                <div class="text-[10px] text-slate-500">X: ${Math.round(item.x)}% Y: ${Math.round(item.y)}% | Масштаб: ${Math.round((item.scale || 1) * 100)}%</div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <button onclick="toggleItemVisibility('${item.id}')" class="px-2 py-1 rounded-lg border text-xs font-semibold transition ${item.hidden ? 'bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300' : 'bg-indigo-600/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-600/30'}" title="${item.hidden ? 'Показать' : 'Скрыть'}">
+                                <i class="fa-solid ${item.hidden ? 'fa-eye-slash' : 'fa-eye'}"></i>
+                            </button>
+                            <button onclick="removeOverlayItem('${item.id}')" class="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-slate-800 transition" title="Удалить">
+                                <i class="fa-solid fa-xmark text-sm"></i>
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function toggleItemVisibility(id) {
+            const item = activeOverlays.find(i => i.id === id);
+            if (item) {
+                item.hidden = !item.hidden;
+                saveAndBroadcast();
+                renderOverlays();
+            }
+        }
+
+        function removeOverlayItem(id) {
+            activeOverlays = activeOverlays.filter(i => i.id !== id);
             saveAndBroadcast();
+            renderOverlays();
+            showToast('Элемент удален');
         }
 
         function clearAllOverlays() {
-            elementsState = {};
-            activeLiveTextId = null;
+            activeOverlays = [];
+            liveTextItemId = null;
             saveAndBroadcast();
+            renderOverlays();
+            showToast('Экран очищен', 'warning');
+        }
+
+        function switchControlTab(tab) {
+            ['text', 'image', 'video', 'widgets'].forEach(t => {
+                const btn = document.getElementById(`tab-btn-${t}`);
+                const content = document.getElementById(`tab-content-${t}`);
+                if (t === tab) {
+                    btn.classList.add('border-indigo-500', 'text-white');
+                    btn.classList.remove('border-transparent', 'text-slate-400');
+                    content.classList.remove('hidden');
+                } else {
+                    btn.classList.remove('border-indigo-500', 'text-white');
+                    btn.classList.add('border-transparent', 'text-slate-400');
+                    content.classList.add('hidden');
+                }
+            });
         }
 
         function copyOverlayLink() {
-            const url = window.location.origin + window.location.pathname + '?mode=overlay';
-            navigator.clipboard.writeText(url);
-            alert('Ссылка для OBS скопирована!');
+            const overlayUrl = `${window.location.origin}${window.location.pathname}?mode=overlay`;
+            const tempInput = document.createElement('input');
+            tempInput.value = overlayUrl;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+            showToast('Ссылка OBS скопирована в буфер');
         }
 
-        function escapeHtml(text) {
-            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+            const toast = document.createElement('div');
+            const bgClass = type === 'warning' ? 'bg-amber-600' : 'bg-indigo-600';
+            toast.className = `${bgClass} text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-semibold flex items-center gap-2 anim-slide pointer-events-auto border border-white/10`;
+            toast.innerHTML = `<i class="fa-solid ${type === 'warning' ? 'fa-triangle-exclamation' : 'fa-circle-check'}"></i> <span>${escapeHtml(message)}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
         }
 
-        function setupDragAndDropOnPreview() {
-            const canvas = document.getElementById('preview-canvas');
-            if (!canvas) return;
-
-            canvas.addEventListener('pointerdown', (e) => {
-                const target = e.target.closest('[data-id]');
-                if (!target) return;
-
-                draggedId = target.dataset.id;
-                const item = elementsState[draggedId];
-                if (!item) {
-                    draggedId = null;
-                    return;
-                }
-
-                const rect = canvas.getBoundingClientRect();
-                const itemCenterX = rect.left + (Number(item.x) || 0) / 100 * rect.width;
-                const itemCenterY = rect.top + (Number(item.y) || 0) / 100 * rect.height;
-                dragOffsetX = e.clientX - itemCenterX;
-                dragOffsetY = e.clientY - itemCenterY;
-                target.setPointerCapture?.(e.pointerId);
-                e.preventDefault();
-            });
-
-            window.addEventListener('pointermove', (e) => {
-                if (!draggedId || !elementsState[draggedId]) return;
-                const rect = canvas.getBoundingClientRect();
-                const x = ((e.clientX - dragOffsetX - rect.left) / rect.width) * 100;
-                const y = ((e.clientY - dragOffsetY - rect.top) / rect.height) * 100;
-
-                const item = elementsState[draggedId];
-                item.x = Math.max(0, Math.min(100, x));
-                item.y = Math.max(0, Math.min(100, y));
-
-                const elDiv = Array.from(canvas.querySelectorAll('[data-id]'))
-                    .find(node => node.dataset.id === draggedId);
-                if (elDiv) {
-                    elDiv.style.left = item.x + '%';
-                    elDiv.style.top = item.y + '%';
-                }
-            });
-
-            window.addEventListener('pointerup', () => {
-                if (!draggedId) return;
-                draggedId = null;
-                saveAndBroadcast();
-            });
-            window.addEventListener('pointercancel', () => {
-                if (!draggedId) return;
-                draggedId = null;
-                saveAndBroadcast();
-            });
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
     </script>
 </body>
