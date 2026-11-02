@@ -72,6 +72,8 @@
             outline: 2px dashed #6366f1;
             outline-offset: 4px;
         }
+        .resize-handle { opacity: 0; transition: opacity 120ms ease; }
+        .draggable-item:hover .resize-handle { opacity: 1; }
     </style>
 </head>
 <body class="bg-obs-dark text-slate-100 font-sans min-h-screen antialiased flex flex-col selection:bg-indigo-600 selection:text-white">
@@ -297,7 +299,7 @@
                         </div>
 
                         <div>
-                            <input type="url" id="video-url-input" placeholder="https://commondatastorage.googleapis.com/.../video.mp4" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition">
+                            <input type="url" id="video-url-input" placeholder="Ссылка на MP4/WebM или YouTube" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition">
                         </div>
 
                         <div>
@@ -502,6 +504,7 @@
     <script>
         const FIREBASE_DB_URL = "https://alfanik-ac5d7-default-rtdb.firebaseio.com/obs_state.json";
         const FIREBASE_FAST_UPDATES_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_fast_updates');
+        const FIREBASE_ASSETS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_assets');
 
         let activeOverlays = [];
         let customWidgetsList = JSON.parse(localStorage.getItem('obs_custom_widgets') || '[]');
@@ -520,6 +523,20 @@
         let cloudStateFetchPending = false;
         let fastUpdatesFetchPending = false;
         let stateInitialized = false;
+        let mediaMigrationStarted = false;
+        let cloudSaveQueue = Promise.resolve();
+        const uploadedMediaAssetKeys = new Set();
+        const pendingMediaAssetUploads = new Map();
+        const pendingMediaAssetLoads = new Set();
+        let isResizingOverlay = false;
+        let resizeOverlayTargetId = null;
+        let resizeOverlayDirection = "";
+        let resizeStartX = 0;
+        let resizeStartY = 0;
+        let resizeStartStretchX = 1;
+        let resizeStartStretchY = 1;
+        let resizeOverlayStartWidth = 1;
+        let resizeOverlayStartHeight = 1;
         let builderMediaSrc = "";
         let builderMediaType = "image";
 
@@ -564,17 +581,19 @@
 
         function getCloudStateFingerprint(item) {
             const { url, html, ...state } = item;
-            if (url !== undefined) state.mediaLength = url.length;
+            if (typeof url === 'string' && url.startsWith('data:')) state.mediaLength = url.length;
+            else if (url !== undefined) state.url = url;
             if (html !== undefined) state.htmlLength = html.length;
             return state;
         }
 
-        function saveAndBroadcast() {
-            const cleanOverlays = activeOverlays.map(item => ({
+        function serializeOverlayForCloud(item) {
+            const cleanItem = {
                 id: item.id,
                 type: item.type,
                 content: item.content,
                 url: item.url,
+                assetKey: item.assetKey,
                 font: item.font,
                 size: item.size,
                 color: item.color,
@@ -582,6 +601,8 @@
                 bgStyle: item.bgStyle,
                 anim: item.anim,
                 scale: item.scale || 1,
+                stretchX: item.stretchX || 1,
+                stretchY: item.stretchY || 1,
                 width: item.width || 'auto',
                 height: item.height || 'auto',
                 x: item.x,
@@ -590,18 +611,93 @@
                 html: item.html,
                 title: item.title,
                 volume: item.volume
-            }));
+            };
+            if (typeof cleanItem.url === 'string' && cleanItem.url.startsWith('data:')) {
+                cleanItem.assetKey = item.assetKey || item.id;
+                delete cleanItem.url;
+            }
+            return cleanItem;
+        }
 
-            const jsonString = JSON.stringify(cleanOverlays);
-            lastCloudString = JSON.stringify(cleanOverlays.map(getCloudStateFingerprint));
-            cloudWritesPending++;
-            fetch(FIREBASE_DB_URL, {
+        function uploadMediaAsset(item) {
+            if (typeof item.url !== 'string' || !item.url.startsWith('data:')) return Promise.resolve();
+            const assetKey = item.assetKey || item.id;
+            item.assetKey = assetKey;
+            if (uploadedMediaAssetKeys.has(assetKey)) return Promise.resolve();
+            if (pendingMediaAssetUploads.has(assetKey)) return pendingMediaAssetUploads.get(assetKey);
+
+            const upload = fetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json`, {
                 method: 'PUT',
-                body: jsonString,
+                body: JSON.stringify(item.url),
                 headers: { 'Content-Type': 'application/json' }
             })
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    uploadedMediaAssetKeys.add(assetKey);
+                })
+                .finally(() => pendingMediaAssetUploads.delete(assetKey));
+            pendingMediaAssetUploads.set(assetKey, upload);
+            return upload;
+        }
+
+        function loadMediaAsset(item) {
+            if (!item.assetKey || item.url || pendingMediaAssetLoads.has(item.assetKey)) return;
+            const assetKey = item.assetKey;
+            pendingMediaAssetLoads.add(assetKey);
+            fetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json`, { cache: 'force-cache' })
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    return res.json();
+                })
+                .then(url => {
+                    const currentItem = activeOverlays.find(current => current.id === item.id);
+                    if (typeof url === 'string' && currentItem && currentItem.assetKey === assetKey) {
+                        currentItem.url = url;
+                        renderOverlaysSmart();
+                    }
+                })
+                .catch(err => console.error("Ошибка загрузки медиа:", err))
+                .finally(() => pendingMediaAssetLoads.delete(assetKey));
+        }
+
+        function migrateLegacyMedia(items) {
+            if (mediaMigrationStarted || document.body.classList.contains('obs-overlay-mode')) return;
+            const legacyMedia = items.filter(item => typeof item.url === 'string' && item.url.startsWith('data:'));
+            if (legacyMedia.length === 0) {
+                mediaMigrationStarted = true;
+                return;
+            }
+            mediaMigrationStarted = true;
+            Promise.all(legacyMedia.map(uploadMediaAsset))
+                .then(() => saveAndBroadcast())
+                .catch(err => {
+                    console.error('Ошибка переноса медиа:', err);
+                    showToast('Не удалось ускорить загрузку старых медиа', 'warning');
+                });
+        }
+
+        function saveAndBroadcast() {
+            const snapshot = activeOverlays.map(item => {
+                if (typeof item.url === 'string' && item.url.startsWith('data:')) item.assetKey = item.assetKey || item.id;
+                return { ...item };
+            });
+            const cleanOverlays = snapshot.map(serializeOverlayForCloud);
+            lastCloudString = JSON.stringify(cleanOverlays.map(getCloudStateFingerprint));
+            cloudWritesPending++;
+            cloudSaveQueue = cloudSaveQueue.catch(() => {}).then(() =>
+                Promise.all(snapshot.map(uploadMediaAsset))
+                    .then(() => fetch(FIREBASE_DB_URL, {
+                        method: 'PUT',
+                        body: JSON.stringify(cleanOverlays),
+                        headers: { 'Content-Type': 'application/json' }
+                    }))
+                    .then(res => {
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    })
+            )
                 .catch(err => console.error("Ошибка сохранения:", err))
                 .finally(() => { cloudWritesPending--; });
+            return cloudSaveQueue;
         }
 
         function sendFastUpdate(item, fields) {
@@ -647,6 +743,12 @@
                             item.y = update.y;
                             changed = true;
                         }
+                        ['stretchX', 'stretchY'].forEach(field => {
+                            if (update[field] !== undefined && item[field] !== update[field]) {
+                                item[field] = update[field];
+                                changed = true;
+                            }
+                        });
                         if (update.content !== undefined && item.content !== update.content) {
                             item.content = update.content;
                             changed = true;
@@ -668,7 +770,8 @@
 
         function getStableOverlayState(item) {
             const { x, y, url, html, ...stableItem } = item;
-            if (url !== undefined) stableItem.mediaLength = url.length;
+            if (typeof url === 'string' && url.startsWith('data:')) stableItem.mediaLength = url.length;
+            else if (url !== undefined) stableItem.url = url;
             if (html !== undefined) stableItem.htmlLength = html.length;
             if (stableItem.type === 'text') delete stableItem.content;
             return stableItem;
@@ -684,6 +787,9 @@
                     let newData = [];
                     if (data && Array.isArray(data)) newData = data;
                     else if (data && typeof data === 'object') newData = Object.values(data);
+                    newData.forEach(item => {
+                        if (item && item.assetKey && !item.url) loadMediaAsset(item);
+                    });
 
                     const newString = JSON.stringify(newData.map(getCloudStateFingerprint));
                     if (newString !== lastCloudString) {
@@ -696,6 +802,7 @@
                         } else {
                             renderOverlaysSmart();
                         }
+                        migrateLegacyMedia(activeOverlays);
                     }
                     if (!stateInitialized) {
                         stateInitialized = true;
@@ -714,6 +821,7 @@
                         if (node) {
                             node.style.left = item.x + '%';
                             node.style.top = item.y + '%';
+                            applyOverlayTransform(node, item);
                             if (item.type === 'text') {
                                 const textNode = node.querySelector('.text-content');
                                 if (textNode) textNode.innerText = item.content || '';
@@ -721,7 +829,9 @@
                         }
                     });
             });
-            renderActiveElementsList(document.getElementById('active-elements-list'));
+            if (!document.body.classList.contains('obs-overlay-mode')) {
+                renderActiveElementsList(document.getElementById('active-elements-list'));
+            }
         }
 
         function switchView(mode) {
@@ -913,13 +1023,34 @@
             reader.readAsDataURL(file);
         }
 
+        function parseMediaUrl(rawUrl) {
+            try {
+                const parsed = new URL(rawUrl);
+                let host = parsed.hostname.toLowerCase();
+                if (host.startsWith('www.')) host = host.slice(4);
+                const pathParts = parsed.pathname.split('/').filter(Boolean);
+                let videoId = '';
+                if (host === 'youtu.be') videoId = pathParts[0] || '';
+                else if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtube-nocookie.com') {
+                    if (parsed.pathname === '/watch') videoId = parsed.searchParams.get('v') || '';
+                    else if (['embed', 'shorts', 'live'].includes(pathParts[0])) videoId = pathParts[1] || '';
+                }
+                if (videoId) return { type: 'youtube', url: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&mute=0&playsinline=1&controls=1` };
+            } catch (err) {
+                return null;
+            }
+            return { type: 'video', url: rawUrl };
+        }
+
         function sendVideoUrlOverlay() {
-            const url = document.getElementById('video-url-input').value.trim();
-            if (!url) return showToast('Укажите URL видео', 'warning');
+            const rawUrl = document.getElementById('video-url-input').value.trim();
+            if (!rawUrl) return showToast('Укажите URL видео', 'warning');
+            const media = parseMediaUrl(rawUrl);
+            if (!media) return showToast('Проверьте ссылку на видео', 'warning');
             activeOverlays.push({
                 id: 'vid_' + Date.now(),
-                type: 'video',
-                url: url,
+                type: media.type,
+                url: media.url,
                 volume: (parseInt(document.getElementById('video-volume').value) || 80) / 100,
                 anim: document.getElementById('global-anim-select').value,
                 scale: 1,
@@ -1169,7 +1300,7 @@
                 item.scale = Math.max(item.scale - 0.1, 0.3);
             }
 
-            target.style.transform = `translate3d(-50%, -50%, 0) scale(${item.scale})`;
+            applyOverlayTransform(target, item);
             saveAndBroadcast();
         }
 
@@ -1190,9 +1321,46 @@
             }
         }
 
+        function startOverlayResize(itemId, direction, e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const point = e.touches ? e.touches[0] : e;
+            const item = activeOverlays.find(current => current.id === itemId);
+            const node = document.querySelector(`#operator-overlay-canvas [data-id="${itemId}"]`);
+            if (!item || !node) return;
+            const rect = node.getBoundingClientRect();
+            isResizingOverlay = true;
+            resizeOverlayTargetId = itemId;
+            resizeOverlayDirection = direction;
+            resizeStartX = point.clientX;
+            resizeStartY = point.clientY;
+            resizeStartStretchX = item.stretchX || 1;
+            resizeStartStretchY = item.stretchY || 1;
+            resizeOverlayStartWidth = rect.width;
+            resizeOverlayStartHeight = rect.height;
+        }
+
         function handleGlobalMouseMove(e) {
             const clientX = e.clientX;
             const clientY = e.clientY;
+
+            if (isResizingOverlay) {
+                const item = activeOverlays.find(current => current.id === resizeOverlayTargetId);
+                const node = document.querySelector(`#operator-overlay-canvas [data-id="${resizeOverlayTargetId}"]`);
+                if (!item || !node) return;
+                if (resizeOverlayDirection === 'horizontal') {
+                    item.stretchX = Math.max(0.2, Math.min(4, resizeStartStretchX + (clientX - resizeStartX) / resizeOverlayStartWidth));
+                } else {
+                    item.stretchY = Math.max(0.2, Math.min(4, resizeStartStretchY + (clientY - resizeStartY) / resizeOverlayStartHeight));
+                }
+                applyOverlayTransform(node, item);
+                const now = Date.now();
+                if (now - lastDragBroadcastAt >= 80) {
+                    lastDragBroadcastAt = now;
+                    sendFastUpdate(item, { stretchX: item.stretchX, stretchY: item.stretchY });
+                }
+                return;
+            }
 
             if (isResizingWidgetBox) {
                 const deltaX = clientX - startMouseX;
@@ -1242,13 +1410,24 @@
         }
 
         function handleGlobalTouchMove(e) {
-            if (!isDragging && !isResizingWidgetBox) return;
+            if (!isDragging && !isResizingWidgetBox && !isResizingOverlay) return;
             e.preventDefault();
             const touch = e.touches[0];
             handleGlobalMouseMove({ clientX: touch.clientX, clientY: touch.clientY });
         }
 
         function handleGlobalMouseUp() {
+            if (isResizingOverlay) {
+                const item = activeOverlays.find(current => current.id === resizeOverlayTargetId);
+                if (item) {
+                    const fields = { stretchX: item.stretchX || 1, stretchY: item.stretchY || 1 };
+                    sendFastUpdate(item, fields);
+                    persistOverlayPatch(item, fields);
+                }
+                isResizingOverlay = false;
+                resizeOverlayTargetId = null;
+                resizeOverlayDirection = '';
+            }
             if (isResizingWidgetBox) {
                 isResizingWidgetBox = false;
                 resizeDir = '';
@@ -1291,10 +1470,15 @@
             reader.readAsDataURL(file);
         }
 
+        function applyOverlayTransform(node, item) {
+            const scale = item.scale || 1;
+            node.style.transform = `translate3d(-50%, -50%, 0) scaleX(${scale * (item.stretchX || 1)}) scaleY(${scale * (item.stretchY || 1)})`;
+        }
+
         function getOverlayRenderSignature(item) {
-            const { x, y, scale, url, html, ...contentState } = item;
-            if (url !== undefined) contentState.mediaLength = url.length;
-            if (html !== undefined) contentState.htmlLength = html.length;
+            const { x, y, scale, stretchX, stretchY, anim, volume, url, html, ...contentState } = item;
+            if (url !== undefined) contentState.mediaUrl = url;
+            if (html !== undefined) contentState.widgetHtml = html;
             return JSON.stringify(contentState);
         }
 
@@ -1325,7 +1509,7 @@
                     const isInteractive = canvas.id === 'operator-overlay-canvas';
                     let node = canvas.querySelector(`[data-id="${item.id}"]`);
                     if (!node || node.dataset.renderSignature !== signature) {
-                        const replacement = createOverlayElementNode(item, isInteractive);
+                        const replacement = createOverlayElementNode(item, isInteractive, !node);
                         if (node) {
                             canvas.replaceChild(replacement, node);
                         } else {
@@ -1335,7 +1519,7 @@
                     } else {
                         node.style.left = item.x + '%';
                         node.style.top = item.y + '%';
-                        node.style.transform = `translate3d(-50%, -50%, 0) scale(${item.scale || 1})`;
+                        applyOverlayTransform(node, item);
                     }
                 });
             });
@@ -1349,18 +1533,22 @@
             renderOverlays();
         }
 
-        function createOverlayElementNode(item, isInteractive) {
+        function createOverlayElementNode(item, isInteractive, animate = true) {
             const node = document.createElement('div');
             node.dataset.id = item.id;
             node.dataset.renderSignature = getOverlayRenderSignature(item);
-            const animClass = item.anim || 'anim-fade';
+            const animClass = animate && item.anim !== 'anim-none' ? (item.anim || 'anim-fade') : '';
             node.className = `absolute flex items-center justify-center ${animClass} ${isInteractive ? 'draggable-item pointer-events-auto cursor-move' : 'pointer-events-none'}`;
-            
+            if (animClass) {
+                node.addEventListener('animationend', event => {
+                    if (event.target === node) node.classList.remove(animClass);
+                }, { once: true });
+            }
+
             node.style.left = item.x + '%';
             node.style.top = item.y + '%';
-            const sc = item.scale || 1;
-            node.style.transform = `translate3d(-50%, -50%, 0) scale(${sc})`;
-            if (!isInteractive) node.style.transition = 'left 100ms linear, top 100ms linear';
+            applyOverlayTransform(node, item);
+            if (!isInteractive) node.style.transition = 'left 100ms cubic-bezier(0.2, 0.8, 0.2, 1), top 100ms cubic-bezier(0.2, 0.8, 0.2, 1)';
 
             if (isInteractive) {
                 node.onmousedown = (e) => startDrag(e, item.id);
@@ -1380,13 +1568,28 @@
             } else if (item.type === 'image') {
                 contentHtml = `<img src="${escapeHtml(item.url)}" class="max-w-[400px] h-auto rounded-2xl shadow-2xl object-contain">`;
             } else if (item.type === 'video') {
-                // Видео рендерится один раз и больше не перезапускается при обновлениях интерфейса!
-                contentHtml = `<video src="${escapeHtml(item.url)}" autoplay loop playsinline class="max-w-[500px] rounded-2xl shadow-2xl" onloadedmetadata="this.volume=${item.volume || 0.8};"></video>`;
+                contentHtml = `<video src="${escapeHtml(item.url)}" autoplay loop playsinline preload="auto" class="max-w-[500px] rounded-2xl shadow-2xl" onloadedmetadata="this.volume=${item.volume ?? 0.8};"></video>`;
+            } else if (item.type === 'youtube') {
+                contentHtml = `<iframe src="${escapeHtml(item.url)}" class="w-[500px] h-[281px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
             } else if (item.type === 'widget') {
                 contentHtml = item.html;
             }
 
             node.innerHTML = contentHtml;
+            if (isInteractive) {
+                [
+                    ['horizontal', 'right-0 top-1/2 -translate-y-1/2 cursor-ew-resize'],
+                    ['vertical', 'bottom-0 left-1/2 -translate-x-1/2 cursor-ns-resize']
+                ].forEach(([direction, position]) => {
+                    const handle = document.createElement('button');
+                    handle.type = 'button';
+                    handle.className = `resize-handle absolute z-10 w-3 h-8 rounded-full bg-indigo-500 border border-white/80 shadow ${position}`;
+                    handle.title = direction === 'horizontal' ? 'Растянуть по ширине' : 'Растянуть по высоте';
+                    handle.onmousedown = event => startOverlayResize(item.id, direction, event);
+                    handle.ontouchstart = event => startOverlayResize(item.id, direction, event);
+                    node.appendChild(handle);
+                });
+            }
             return node;
         }
 
@@ -1404,10 +1607,10 @@
                     <div class="bg-slate-900 border border-slate-700 p-2.5 rounded-xl flex items-center justify-between text-xs transition hover:border-slate-600">
                         <div class="flex items-center gap-3 overflow-hidden mr-2">
                             <div class="w-7 h-7 rounded-lg bg-indigo-950 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold shrink-0">
-                                ${item.type === 'text' ? '<i class="fa-solid fa-font"></i>' : (item.type === 'image' ? '<i class="fa-solid fa-image"></i>' : (item.type === 'video' ? '<i class="fa-solid fa-video"></i>' : '<i class="fa-solid fa-shapes"></i>'))}
+                                ${item.type === 'text' ? '<i class="fa-solid fa-font"></i>' : (item.type === 'image' ? '<i class="fa-solid fa-image"></i>' : (item.type === 'video' || item.type === 'youtube' ? '<i class="fa-solid fa-video"></i>' : '<i class="fa-solid fa-shapes"></i>'))}
                             </div>
                             <div class="truncate">
-                                <div class="font-semibold text-slate-200 truncate ${item.hidden ? 'line-through text-slate-500' : ''}">${escapeHtml(item.title || item.content || item.url || 'Элемент')}</div>
+                                <div class="font-semibold text-slate-200 truncate ${item.hidden ? 'line-through text-slate-500' : ''}">${escapeHtml(item.title || item.content || (item.type === 'video' || item.type === 'youtube' ? 'Видео' : (item.type === 'image' ? 'Изображение' : 'Элемент')))}</div>
                                 <div class="text-[10px] text-slate-500">X: ${Math.round(item.x)}% Y: ${Math.round(item.y)}% | Масштаб: ${Math.round((item.scale || 1) * 100)}%</div>
                             </div>
                         </div>
