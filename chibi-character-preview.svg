@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 440" width="720" height="880">
+<defs>
+ <linearGradient id="shirt" x2="1" y2="1"><stop stop-color="#60656b"/><stop offset="1" stop-color="#30343b"/></linearGradient>
+ <linearGradient id="flame" x2="0" y2="1"><stop stop-color="#fff7ad"/><stop offset=".45" stop-color="#fb923c"/><stop offset="1" stop-color="#ef4444"/></linearGradient>
+ <radialGradient id="skin"><stop stop-color="#ffd9bd"/><stop offset="1" stop-color="#e9ad8d"/></radialGradient>
+ <filter id="shadow"><feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#111827" flood-opacity=".25"/></filter>
+</defs>
+<ellipse cx="180" cy="417" rx="99" ry="13" fill="#312e8140"/>
+<!-- backpack and jet flame -->
+<path d="M95 250Q62 244 61 273L63 328Q65 345 89 338L117 322 119 266Z" fill="#272a31" stroke="#111827" stroke-width="6"/>
+<path d="M70 329Q52 365 76 394Q80 360 99 341Z" fill="url(#flame)"/>
+<path d="M96 334Q87 368 109 391Q107 359 126 338Z" fill="#fb7185"/>
+<path d="M85 351Q81 370 90 379Q97 360 101 350Z" fill="#fff7ad"/>
+<rect x="70" y="263" width="37" height="14" rx="7" fill="#94a3b8"/><circle cx="85" cy="304" r="7" fill="#38bdf8"/>
+<!-- legs and sneakers -->
+<path d="M137 323L130 382Q129 398 150 399L168 394 173 332Z" fill="#d1d5db" stroke="#9ca3af" stroke-width="4"/>
+<path d="M196 329L201 384Q202 401 222 397L238 391 228 324Z" fill="#c4c8cd" stroke="#9ca3af" stroke-width="4"/>
+<path d="M128 383Q108 387 112 408Q136 424 170 413L173 400 153 390Z" fill="#252832" stroke="#15171c" stroke-width="5"/>
+<path d="M200 386Q183 394 190 412Q215 426 245 410L240 397 221 387Z" fill="#252832" stroke="#15171c" stroke-width="5"/>
+<path d="M121 409h42m37 1h39" stroke="#e2e8f0" stroke-width="4" stroke-linecap="round"/>
+<!-- oversized shirt -->
+<path d="M132 166Q103 170 87 200L61 270Q58 284 75 292L109 303 101 332Q176 358 254 329L247 296 275 286Q286 279 277 260L252 194Q239 169 210 165Z" fill="url(#shirt)" stroke="#282b31" stroke-width="6" filter="url(#shadow)"/>
+<path d="M137 170Q151 198 181 196Q211 195 220 169" fill="none" stroke="#202329" stroke-width="14"/>
+<path d="M137 203Q129 259 137 331M231 205Q241 265 234 325" fill="none" stroke="#858a91" stroke-opacity=".28" stroke-width="5"/>
+<!-- arms -->
+<path d="M89 207Q69 226 65 260L84 276Q108 251 117 226" fill="url(#skin)" stroke="#cc9278" stroke-width="5"/>
+<path d="M253 207Q276 222 287 253L269 269Q244 248 231 226" fill="url(#skin)" stroke="#cc9278" stroke-width="5"/>
+<!-- sling strap and bag -->
+<path d="M113 174Q177 226 245 297" fill="none" stroke="#17191e" stroke-width="17" stroke-linecap="round"/>
+<path d="M183 244Q209 228 232 246L253 291Q258 308 240 317L202 331Q186 333 179 319L165 274Q161 257 183 244Z" fill="#20232a" stroke="#111318" stroke-width="5"/>
+<path d="M183 270Q208 255 233 265M192 300l35-12" fill="none" stroke="#555b65" stroke-width="4" stroke-linecap="round"/>
+<!-- neck and head -->
+<path d="M157 139L155 169Q176 188 203 167L198 136Z" fill="url(#skin)"/>
+<path d="M112 88Q118 42 180 42Q244 42 248 101L238 145Q224 177 182 180Q137 176 120 145Z" fill="url(#skin)" stroke="#c98f78" stroke-width="5"/>
+<!-- hair -->
+<path d="M117 111Q96 82 119 59Q118 29 153 39Q175 15 199 37Q233 24 245 56Q272 80 250 112L232 103Q218 76 201 69Q172 91 135 82Z" fill="#29272a"/>
+<path d="M137 51Q159 37 179 49M204 44l24 12" fill="none" stroke="#484047" stroke-width="6" stroke-linecap="round"/>
+<!-- cap -->
+<path d="M114 80Q110 27 169 21Q225 19 246 67L231 90Q184 72 132 98Z" fill="#17191e" stroke="#090b0f" stroke-width="6"/>
+<path d="M121 65Q174 39 231 64" fill="none" stroke="#454951" stroke-width="5"/>
+<path d="M213 79Q258 72 272 90Q246 106 224 98Z" fill="#252830" stroke="#101217" stroke-width="5"/>
+<circle cx="232" cy="64" r="4" fill="#9ca3af"/>
+<!-- expression -->
+<path d="M139 111l23-2M193 109l21 2" stroke="#382925" stroke-width="6" stroke-linecap="round"/>
+<ellipse cx="153" cy="127" rx="7" ry="9" fill="#23232a"/><ellipse cx="204" cy="126" rx="7" ry="9" fill="#23232a"/>
+<circle cx="155" cy="124" r="2.5" fill="white"/><circle cx="206" cy="123" r="2.5" fill="white"/>
+<path d="M177 130Q172 143 182 143" fill="none" stroke="#c98f78" stroke-width="4" stroke-linecap="round"/>
+<path d="M162 155Q179 165 197 153" fill="none" stroke="#9e5260" stroke-width="4" stroke-linecap="round"/>
+<ellipse cx="133" cy="145" rx="11" ry="5" fill="#fb9b9d" opacity=".5"/><ellipse cx="224" cy="143" rx="11" ry="5" fill="#fb9b9d" opacity=".5"/>
+<!-- chain and cross -->
+<path d="M151 174Q180 201 211 171" fill="none" stroke="#d1d5db" stroke-width="4"/>
+<path d="M180 193v22m-9-14h18" stroke="#f8fafc" stroke-width="5" stroke-linecap="round"/>
+<!-- shine -->
+<path d="M35 115l6 15 15 6-15 6-6 15-6-15-15-6 15-6z" fill="#fbbf24"/>
+<path d="M310 177l5 12 12 5-12 5-5 12-5-12-12-5 12-5z" fill="#a78bfa"/>
+<text x="180" y="25" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" font-weight="700" fill="#64748b">ЧИБИ · ВЕКТОРНЫЙ ЭСКИЗ</text>
+</svg>
