@@ -222,7 +222,7 @@
                                 <label class="block text-xs font-semibold text-slate-300">Текст оверлея (Синхронизация на лету)</label>
                                 <span class="text-[10px] text-emerald-400 flex items-center gap-1"><i class="fa-solid fa-bolt"></i>Живой ввод</span>
                             </div>
-                            <textarea id="text-input" rows="3" oninput="onLiveTextTyping()" placeholder="Введите текст..." class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition resize-none">ПРИВЕТ СТРИМ! 🔥 ВСЕМ ПРИЯТНОГО ПРОСМОТРА!</textarea>
+                            <textarea id="text-input" rows="3" oninput="onLiveTextTyping()" placeholder="Введите текст..." class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition resize-none"></textarea>
                         </div>
 
                         <div class="grid grid-cols-2 gap-3">
@@ -480,6 +480,9 @@
                         <button onclick="setWidgetFullscreen()" class="w-full bg-indigo-700 hover:bg-indigo-600 border border-indigo-400/50 text-white font-bold py-2.5 px-4 rounded-xl shadow transition text-xs flex items-center justify-center gap-2 cursor-pointer">
                             <i class="fa-solid fa-expand"></i> Сделать во весь экран (1920×1080)
                         </button>
+                        <button onclick="resetWidgetSize()" class="w-full bg-slate-700 hover:bg-slate-600 border border-slate-500/50 text-slate-100 font-bold py-2.5 px-4 rounded-xl shadow transition text-xs flex items-center justify-center gap-2 cursor-pointer">
+                            <i class="fa-solid fa-rotate-left"></i> Вернуть как было (260×160)
+                        </button>
                     </div>
                 </div>
             </div>
@@ -513,14 +516,14 @@
             </div>
             <div>
                 <label class="block text-xs font-semibold text-slate-300 mb-1">Аудиофайл</label>
-                <input id="sound-file-input" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-300 file:bg-pink-600 file:text-white file:rounded-lg file:border-0 file:py-1 file:px-3 file:text-xs file:font-semibold cursor-pointer">
+                <input id="sound-file-input" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" onchange="previewSoundFile(event)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-300 file:bg-pink-600 file:text-white file:rounded-lg file:border-0 file:py-1 file:px-3 file:text-xs file:font-semibold cursor-pointer">
             </div>
             <div>
                 <div class="flex justify-between items-center mb-1">
                     <label for="sound-volume-input" class="text-xs font-semibold text-slate-300">Громкость</label>
                     <span id="sound-volume-label" class="text-xs text-pink-300 font-mono">80%</span>
                 </div>
-                <input id="sound-volume-input" type="range" min="0" max="100" value="80" oninput="document.getElementById('sound-volume-label').innerText = this.value + '%'" class="w-full accent-pink-500">
+                <input id="sound-volume-input" type="range" min="0" max="100" value="80" oninput="onSoundPreviewVolumeChange(this.value)" class="w-full accent-pink-500">
             </div>
             <div class="flex gap-2">
                 <button onclick="closeSoundBuilderModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-2.5 rounded-xl text-xs cursor-pointer">Отмена</button>
@@ -588,7 +591,59 @@
 
         let activeOverlays = [];
         let customWidgetsList = JSON.parse(localStorage.getItem('obs_custom_widgets') || '[]');
+        const CUSTOM_WIDGETS_DB_NAME = 'obs_custom_widgets_db';
+        const CUSTOM_WIDGETS_STORE_NAME = 'widgets';
+
+        function openCustomWidgetsDb() {
+            return new Promise((resolve, reject) => {
+                if (!window.indexedDB) return reject(new Error('IndexedDB недоступен'));
+                const request = indexedDB.open(CUSTOM_WIDGETS_DB_NAME, 1);
+                request.onupgradeneeded = () => {
+                    if (!request.result.objectStoreNames.contains(CUSTOM_WIDGETS_STORE_NAME)) {
+                        request.result.createObjectStore(CUSTOM_WIDGETS_STORE_NAME);
+                    }
+                };
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error || new Error('Не удалось открыть хранилище виджетов'));
+            });
+        }
+
+        async function persistCustomWidgets(widgets) {
+            if (!window.indexedDB) {
+                localStorage.setItem('obs_custom_widgets', JSON.stringify(widgets));
+                return;
+            }
+            const db = await openCustomWidgetsDb();
+            await new Promise((resolve, reject) => {
+                const transaction = db.transaction(CUSTOM_WIDGETS_STORE_NAME, 'readwrite');
+                transaction.objectStore(CUSTOM_WIDGETS_STORE_NAME).put(widgets, 'list');
+                transaction.oncomplete = resolve;
+                transaction.onerror = () => reject(transaction.error || new Error('Не удалось сохранить виджеты'));
+                transaction.onabort = () => reject(transaction.error || new Error('Сохранение виджетов отменено'));
+            });
+            db.close();
+        }
+
+        async function loadCustomWidgets() {
+            if (!window.indexedDB) return;
+            const db = await openCustomWidgetsDb();
+            const saved = await new Promise((resolve, reject) => {
+                const transaction = db.transaction(CUSTOM_WIDGETS_STORE_NAME, 'readonly');
+                const request = transaction.objectStore(CUSTOM_WIDGETS_STORE_NAME).get('list');
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error || new Error('Не удалось загрузить виджеты'));
+            });
+            db.close();
+            if (Array.isArray(saved)) {
+                customWidgetsList = saved;
+            } else if (customWidgetsList.length) {
+                await persistCustomWidgets(customWidgetsList);
+            }
+        }
         let customSoundsList = [];
+        let soundPreviewAudio = null;
+        let soundPreviewObjectUrl = '';
+        const playedOverlayAudioIds = new Set();
         let customSoundsOwnerUid = '';
         let customSoundsLoaded = false;
         let liveTextItemId = null;
@@ -917,6 +972,13 @@
                 if (!await ensureOverlayAuth()) return;
             } else if (!await ensureModeratorAuth()) {
                 return;
+            }
+            if (!isOverlay) {
+                try {
+                    await loadCustomWidgets();
+                } catch (error) {
+                    console.error('Не удалось загрузить сохраненные виджеты:', error);
+                }
             }
             renderCustomWidgetsMenu();
 
@@ -1566,6 +1628,15 @@
             showToast('Размер виджета установлен: 1920×1080');
         }
 
+        function resetWidgetSize() {
+            builderWidgetWidth = 260;
+            builderWidgetHeight = 160;
+            updateBuilderPreview();
+            const resizeModal = document.getElementById('widget-resize-modal');
+            if (!resizeModal.classList.contains('hidden')) updateResizeFramePreview();
+            showToast('Размер виджета возвращен: 260×160');
+        }
+
         function openWidgetResizeModal() {
             document.getElementById('widget-resize-modal').classList.remove('hidden');
             updateResizeFramePreview();
@@ -1615,7 +1686,7 @@
             startH = builderWidgetHeight;
         }
 
-        function saveCustomWidget() {
+        async function saveCustomWidget() {
             const name = document.getElementById('bw-name').value.trim() || 'Мой виджет';
             const urlVal = document.getElementById('bw-url').value.trim();
             const mediaSrc = urlVal || builderMediaSrc;
@@ -1644,8 +1715,15 @@
             `;
 
             const newCustomWidget = { id: 'cw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), name, html, anim, scale: 1 };
-            customWidgetsList.push(newCustomWidget);
-            localStorage.setItem('obs_custom_widgets', JSON.stringify(customWidgetsList));
+            const nextWidgets = [...customWidgetsList, newCustomWidget];
+            try {
+                await persistCustomWidgets(nextWidgets);
+            } catch (error) {
+                console.error('Не удалось сохранить виджет:', error);
+                showToast('Не удалось сохранить виджет в хранилище браузера', 'warning');
+                return;
+            }
+            customWidgetsList = nextWidgets;
 
             renderCustomWidgetsMenu();
             closeWidgetBuilderModal();
@@ -1693,9 +1771,17 @@
             showToast(`Виджет "${w.name}" выведен на экран`);
         }
 
-        function deleteCustomWidget(id) {
+        async function deleteCustomWidget(id) {
             const widget = customWidgetsList.find(item => item.id === id);
-            customWidgetsList = customWidgetsList.filter(item => item.id !== id);
+            const nextWidgets = customWidgetsList.filter(item => item.id !== id);
+            try {
+                await persistCustomWidgets(nextWidgets);
+            } catch (error) {
+                console.error('Не удалось удалить виджет:', error);
+                showToast('Не удалось сохранить изменения списка виджетов', 'warning');
+                return;
+            }
+            customWidgetsList = nextWidgets;
             const previousOverlayCount = activeOverlays.length;
             activeOverlays = activeOverlays.filter(item => {
                 if (item.type !== 'widget') return true;
@@ -1703,7 +1789,6 @@
                 return !widget || item.title !== widget.name;
             });
 
-            localStorage.setItem('obs_custom_widgets', JSON.stringify(customWidgetsList));
             renderCustomWidgetsMenu();
             if (activeOverlays.length !== previousOverlayCount) {
                 saveAndBroadcast();
@@ -1723,6 +1808,35 @@
 
         function closeSoundBuilderModal() {
             document.getElementById('sound-builder-modal').classList.add('hidden');
+            if (soundPreviewAudio) {
+                soundPreviewAudio.pause();
+                soundPreviewAudio.currentTime = 0;
+                soundPreviewAudio = null;
+            }
+            if (soundPreviewObjectUrl) {
+                URL.revokeObjectURL(soundPreviewObjectUrl);
+                soundPreviewObjectUrl = '';
+            }
+        }
+
+        function previewSoundFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            if (soundPreviewAudio) soundPreviewAudio.pause();
+            if (soundPreviewObjectUrl) URL.revokeObjectURL(soundPreviewObjectUrl);
+            soundPreviewObjectUrl = URL.createObjectURL(file);
+            soundPreviewAudio = new Audio(soundPreviewObjectUrl);
+            soundPreviewAudio.volume = Number(document.getElementById('sound-volume-input').value) / 100;
+            soundPreviewAudio.loop = true;
+            soundPreviewAudio.play().catch(error => {
+                console.error('Не удалось прослушать звук:', error);
+                showToast('Браузер не разрешил предпрослушивание звука', 'warning');
+            });
+        }
+
+        function onSoundPreviewVolumeChange(value) {
+            document.getElementById('sound-volume-label').innerText = value + '%';
+            if (soundPreviewAudio) soundPreviewAudio.volume = Number(value) / 100;
         }
 
         async function loadModeratorSounds() {
@@ -2434,15 +2548,19 @@
             }
 
             node.innerHTML = contentHtml;
-            if (item.type === 'audio' && !isInteractive) {
+            if (item.type === 'audio' && !isInteractive && item.url && !playedOverlayAudioIds.has(item.id)) {
+                playedOverlayAudioIds.add(item.id);
                 const audio = document.createElement('audio');
-                audio.src = item.url || '';
+                audio.src = item.url;
                 audio.volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.8)));
                 audio.autoplay = true;
+                audio.loop = false;
+                audio.playsInline = true;
                 audio.preload = 'auto';
                 audio.style.display = 'none';
                 audio.addEventListener('ended', () => removeOverlayItem(item.id), { once: true });
                 node.appendChild(audio);
+                audio.load();
                 audio.play().catch(error => console.error('OBS не смог воспроизвести звук:', error));
             }
             if (isInteractive) {
