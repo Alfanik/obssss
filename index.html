@@ -575,6 +575,7 @@
         const FIREBASE_FAST_UPDATES_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_fast_updates');
         const FIREBASE_ASSETS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_assets');
         const FIREBASE_MODERATOR_SOUNDS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_moderator_sounds');
+        const FIREBASE_MODERATOR_WIDGETS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_assets');
         const FIREBASE_VOICE_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_voice');
         const FIREBASE_PRESENCE_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_moderators/online');
         const FIREBASE_API_KEY = 'AIzaSyCfffBZIVTv9quqZ2JFj44kDF05GdVOhbk';
@@ -640,6 +641,101 @@
                 await persistCustomWidgets(customWidgetsList);
             }
         }
+        let customWidgetsOwnerUid = '';
+        let customWidgetsLoaded = false;
+
+        function moderatorWidgetsCatalogUrl(uid = moderatorAuth?.uid) {
+            return uid ? `${FIREBASE_MODERATOR_WIDGETS_URL}/moderator_widgets_${encodeURIComponent(uid)}.json` : '';
+        }
+
+        function normalizeCustomWidget(widget) {
+            const normalized = { ...widget, html: widget?.html || '' };
+            const mediaMatch = normalized.html.match(/<(video|img)[^>]*src=["']([^"']+)["']/i);
+            if (mediaMatch && mediaMatch[2] !== '__WIDGET_MEDIA__') {
+                normalized.mediaSrc = normalized.mediaSrc || mediaMatch[2];
+                normalized.mediaType = normalized.mediaType || (mediaMatch[1].toLowerCase() === 'video' ? 'video' : 'image');
+                normalized.html = normalized.html.replace(mediaMatch[2], '__WIDGET_MEDIA__');
+            }
+            normalized.width = Number(normalized.width) || Number(normalized.html.match(/width:\s*(\d+)px/i)?.[1]) || 260;
+            normalized.height = Number(normalized.height) || Number(normalized.html.match(/height:\s*(\d+)px/i)?.[1]) || 160;
+            return normalized;
+        }
+
+        async function persistModeratorWidgets(widgets, ownerUid = moderatorAuth?.uid) {
+            if (!ownerUid) throw new Error('Не найден UID модератора');
+            const metadata = [];
+            for (const sourceWidget of widgets) {
+                const widget = normalizeCustomWidget(sourceWidget);
+                if (typeof widget.mediaSrc === 'string' && widget.mediaSrc.startsWith('data:')) {
+                    if (!widget.mediaAssetKey) {
+                        widget.mediaAssetKey = `moderator_widget_media_${ownerUid}_${widget.id}`;
+                    }
+                    await uploadMediaAsset({ id: widget.mediaAssetKey, assetKey: widget.mediaAssetKey, url: widget.mediaSrc });
+                    delete widget.mediaSrc;
+                }
+                metadata.push(widget);
+            }
+            const response = await firebaseFetch(moderatorWidgetsCatalogUrl(ownerUid), {
+                method: 'PUT',
+                body: JSON.stringify(metadata),
+                headers: { 'Content-Type': 'application/json' }
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        }
+
+        async function loadModeratorWidgets() {
+            const ownerUid = moderatorAuth?.uid;
+            if (!ownerUid) {
+                customWidgetsList = [];
+                customWidgetsOwnerUid = '';
+                customWidgetsLoaded = false;
+                renderCustomWidgetsMenu();
+                return;
+            }
+
+            customWidgetsLoaded = false;
+            customWidgetsOwnerUid = ownerUid;
+            try {
+                const response = await firebaseFetch(moderatorWidgetsCatalogUrl(ownerUid), { cache: 'no-store' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const saved = await response.json();
+                let widgets;
+                if (Array.isArray(saved)) {
+                    widgets = saved;
+                } else if (customWidgetsList.length) {
+                    widgets = customWidgetsList.map(normalizeCustomWidget);
+                    await persistModeratorWidgets(widgets, ownerUid);
+                    await persistCustomWidgets([]);
+                    localStorage.removeItem('obs_custom_widgets');
+                } else {
+                    widgets = [];
+                }
+
+                widgets = await Promise.all(widgets.map(async sourceWidget => {
+                    const widget = normalizeCustomWidget(sourceWidget);
+                    if (widget.mediaAssetKey) {
+                        const assetResponse = await firebaseFetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(widget.mediaAssetKey)}.json`, { cache: 'force-cache' });
+                        if (!assetResponse.ok) throw new Error(`HTTP ${assetResponse.status}`);
+                        widget.mediaSrc = await assetResponse.json();
+                    }
+                    return widget;
+                }));
+                if (moderatorAuth?.uid !== ownerUid) return;
+                customWidgetsList = widgets;
+                customWidgetsOwnerUid = ownerUid;
+                customWidgetsLoaded = true;
+                renderCustomWidgetsMenu();
+            } catch (error) {
+                console.error('Не удалось загрузить виджеты модератора:', error);
+                if (moderatorAuth?.uid === ownerUid) {
+                    customWidgetsList = [];
+                    customWidgetsLoaded = false;
+                    renderCustomWidgetsMenu();
+                    showToast('Не удалось загрузить личные виджеты из Firebase', 'warning');
+                }
+            }
+        }
+
         let customSoundsList = [];
         let soundPreviewAudio = null;
         let soundPreviewObjectUrl = '';
@@ -666,6 +762,7 @@
         const uploadedMediaAssetKeys = new Set();
         const pendingMediaAssetUploads = new Map();
         const pendingMediaAssetLoads = new Set();
+        const loadedMediaAssets = new Map();
         let isResizingOverlay = false;
         let resizeOverlayTargetId = null;
         let resizeOverlayDirection = "";
@@ -976,6 +1073,7 @@
             if (!isOverlay) {
                 try {
                     await loadCustomWidgets();
+                    await loadModeratorWidgets();
                 } catch (error) {
                     console.error('Не удалось загрузить сохраненные виджеты:', error);
                 }
@@ -1071,8 +1169,19 @@
         }
 
         function loadMediaAsset(item) {
-            if (!item.assetKey || item.url || pendingMediaAssetLoads.has(item.assetKey)) return;
+            if (!item.assetKey || item.url) return;
             const assetKey = item.assetKey;
+            const cachedUrl = loadedMediaAssets.get(assetKey);
+            if (cachedUrl) {
+                const currentItem = activeOverlays.find(current => current.id === item.id);
+                if (currentItem && !currentItem.url) {
+                    currentItem.url = cachedUrl;
+                    renderOverlaysSmart();
+                }
+                return;
+            }
+            if (pendingMediaAssetLoads.has(assetKey)) return;
+
             pendingMediaAssetLoads.add(assetKey);
             firebaseFetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json`, { cache: 'force-cache' })
                 .then(res => {
@@ -1080,11 +1189,16 @@
                     return res.json();
                 })
                 .then(url => {
-                    const currentItem = activeOverlays.find(current => current.id === item.id);
-                    if (typeof url === 'string' && currentItem && currentItem.assetKey === assetKey) {
-                        currentItem.url = url;
-                        renderOverlaysSmart();
-                    }
+                    if (typeof url !== 'string') return;
+                    loadedMediaAssets.set(assetKey, url);
+                    let updated = false;
+                    activeOverlays.forEach(current => {
+                        if (current.assetKey === assetKey && !current.url) {
+                            current.url = url;
+                            updated = true;
+                        }
+                    });
+                    if (updated) renderOverlaysSmart();
                 })
                 .catch(err => console.error("Ошибка загрузки медиа:", err))
                 .finally(() => pendingMediaAssetLoads.delete(assetKey));
@@ -1698,12 +1812,13 @@
 
             let bgStyle = bgToggle === 'solid' ? `background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); border: 2px solid ${color}; padding: 12px; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.7);` : 'padding: 4px;';
 
+            const mediaType = builderMediaType === 'video' || /\.(mp4|webm)(?:[?#].*)?$/i.test(urlVal) ? 'video' : 'image';
             let mediaTag = '';
             if (mediaSrc) {
-                if (builderMediaType === 'video' || urlVal.endsWith('.mp4') || urlVal.endsWith('.webm')) {
-                    mediaTag = `<video src="${mediaSrc}" autoplay loop playsinline style="width: 100%; height: 100%; object-fit: cover; border-radius: 10px;" onloadedmetadata="this.volume=${vol};"></video>`;
+                if (mediaType === 'video') {
+                    mediaTag = `<video src="__WIDGET_MEDIA__" autoplay loop playsinline preload="metadata" style="width: 100%; height: 100%; object-fit: cover; border-radius: 10px;"></video>`;
                 } else {
-                    mediaTag = `<img src="${mediaSrc}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 10px;" />`;
+                    mediaTag = `<img src="__WIDGET_MEDIA__" style="width: 100%; height: 100%; object-fit: cover; border-radius: 10px;" />`;
                 }
             }
 
@@ -1714,20 +1829,31 @@
                 </div>
             `;
 
-            const newCustomWidget = { id: 'cw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), name, html, anim, scale: 1 };
+            const ownerUid = moderatorAuth?.uid;
+            if (!ownerUid) return showToast('Сначала войдите в аккаунт модератора', 'warning');
+            const newCustomWidget = {
+                id: 'cw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+                name, html, anim, scale: 1,
+                width: builderWidgetWidth,
+                height: builderWidgetHeight,
+                mediaType,
+                mediaSrc
+            };
             const nextWidgets = [...customWidgetsList, newCustomWidget];
             try {
-                await persistCustomWidgets(nextWidgets);
+                await persistModeratorWidgets(nextWidgets, ownerUid);
             } catch (error) {
                 console.error('Не удалось сохранить виджет:', error);
-                showToast('Не удалось сохранить виджет в хранилище браузера', 'warning');
+                showToast('Не удалось сохранить виджет в Firebase. Проверьте подключение и правила obs_assets.', 'warning');
                 return;
             }
+            if (moderatorAuth?.uid !== ownerUid) return;
             customWidgetsList = nextWidgets;
-
+            customWidgetsOwnerUid = ownerUid;
+            customWidgetsLoaded = true;
             renderCustomWidgetsMenu();
             closeWidgetBuilderModal();
-            showToast('Виджет успешно сохранен!');
+            showToast('Виджет сохранен в аккаунт модератора!');
         }
 
         function renderCustomWidgetsMenu() {
@@ -1751,19 +1877,25 @@
         }
 
         function sendCustomWidget(id) {
-            const w = customWidgetsList.find(item => item.id === id);
-            if (!w) return;
+            const sourceWidget = customWidgetsList.find(item => item.id === id);
+            if (!sourceWidget) return;
+            const w = normalizeCustomWidget(sourceWidget);
             const widgetCount = activeOverlays.filter(item => item.type === 'widget').length;
+            const fullscreen = w.width >= 1920 && w.height >= 1080;
             activeOverlays.push({
                 id: 'custom_widget_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
                 customWidgetId: w.id,
                 type: 'widget',
                 title: w.name,
                 html: w.html,
+                url: w.mediaSrc,
+                assetKey: w.mediaAssetKey,
+                width: w.width,
+                height: w.height,
                 anim: w.anim,
                 scale: 1,
-                x: 38 + (widgetCount % 4) * 8,
-                y: 38 + (Math.floor(widgetCount / 4) % 4) * 8,
+                x: fullscreen ? 50 : 38 + (widgetCount % 4) * 8,
+                y: fullscreen ? 50 : 38 + (Math.floor(widgetCount / 4) % 4) * 8,
                 hidden: false
             });
             saveAndBroadcast();
@@ -1772,15 +1904,18 @@
         }
 
         async function deleteCustomWidget(id) {
+            const ownerUid = moderatorAuth?.uid;
+            if (!ownerUid) return showToast('Сначала войдите в аккаунт модератора', 'warning');
             const widget = customWidgetsList.find(item => item.id === id);
             const nextWidgets = customWidgetsList.filter(item => item.id !== id);
             try {
-                await persistCustomWidgets(nextWidgets);
+                await persistModeratorWidgets(nextWidgets, ownerUid);
             } catch (error) {
                 console.error('Не удалось удалить виджет:', error);
-                showToast('Не удалось сохранить изменения списка виджетов', 'warning');
+                showToast('Не удалось сохранить изменения списка виджетов в Firebase', 'warning');
                 return;
             }
+            if (moderatorAuth?.uid !== ownerUid) return;
             customWidgetsList = nextWidgets;
             const previousOverlayCount = activeOverlays.length;
             activeOverlays = activeOverlays.filter(item => {
@@ -2544,7 +2679,7 @@
             } else if (item.type === 'tiktok') {
                 contentHtml = `<iframe src="${escapeHtml(item.url)}" class="w-[325px] h-[578px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
             } else if (item.type === 'widget') {
-                contentHtml = item.html;
+                contentHtml = item.url ? item.html.split('__WIDGET_MEDIA__').join(escapeHtml(item.url)) : item.html;
             }
 
             node.innerHTML = contentHtml;
