@@ -2008,10 +2008,9 @@
                 const burgerOfferUrl = 'https://burgerkingapp.onelink.me/220f/ntzpmfpp?Erid=CQH36pWzJqCc6bYSEknw3fYwpfe39Lw6nhJSdHJyCsfEYe';
                 const burgerQrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=2&data=' + encodeURIComponent(burgerOfferUrl);
                 html = `<style>
-                    .burger-scene{position:relative;width:min(900px,96vw);height:480px;overflow:visible;isolation:isolate;font-family:system-ui,sans-serif}
+                    .burger-scene{position:relative;width:1920px;height:1080px;overflow:hidden;isolation:isolate;font-family:system-ui,sans-serif}
                     .burger-halo{position:absolute;left:7%;top:8%;width:55%;height:82%;border-radius:50%;background:radial-gradient(ellipse,#fb923c44,#facc1533 40%,transparent 72%);filter:blur(15px);animation:burgerPulse 1.8s ease-in-out infinite alternate}
-                    .burger-rail{position:absolute;z-index:1;left:8%;right:45%;top:39%;height:13px;border:3px solid #fef3c7;border-radius:999px;background:linear-gradient(#64748b,#1e293b);box-shadow:0 4px 0 #7c2d12,0 0 18px #fdba7488;transform-origin:left center;animation:burgerRail 15s linear both}
-                    .burger-person{position:absolute;z-index:2;left:15%;top:calc(50% - 215px);width:clamp(230px,29vw,320px);height:auto;overflow:visible;filter:drop-shadow(0 10px 12px #11182788) drop-shadow(0 0 12px #f9731677);animation:burgerDrop 15s cubic-bezier(.2,.7,.25,1) both;transform-origin:50% 12%;backface-visibility:visible}
+                    .burger-person{position:absolute;z-index:2;left:15%;bottom:-20px;width:clamp(230px,29vw,320px);height:auto;overflow:visible;filter:drop-shadow(0 10px 12px #11182788) drop-shadow(0 0 12px #f9731677);animation:burgerDrop 15s linear both;backface-visibility:visible}
                     .burger-speech{position:absolute;z-index:3;left:39%;top:23%;width:min(470px,55vw);padding:17px 23px;border:3px solid #fff7ed;border-radius:25px 25px 25px 7px;background:linear-gradient(145deg,#fff7dd,#fed7aa);box-shadow:0 0 0 4px #f97316,0 12px 30px #43140766;color:#431407;font-size:clamp(18px,2.5vw,27px);line-height:1.15;font-weight:950;text-align:center;opacity:0;transform:translateY(18px) scale(.8);animation:burgerSpeech 15s ease both}
                     .burger-speech:after{content:"";position:absolute;left:-13px;bottom:18px;width:20px;height:20px;background:#fff0d5;border-left:3px solid #fff7ed;border-bottom:3px solid #fff7ed;transform:rotate(45deg)}
                     .burger-speech small{display:block;margin-top:6px;font-size:12px;letter-spacing:.08em;color:#9a3412}
@@ -2023,10 +2022,8 @@
                     .burger-crumb:nth-of-type(1){left:8%;top:25%;--dx:-80px;--dy:-90px}
                     .burger-crumb:nth-of-type(2){left:26%;top:32%;--dx:100px;--dy:-120px;animation-delay:.1s}
                     .burger-crumb:nth-of-type(3){left:16%;top:55%;--dx:-115px;--dy:30px;animation-delay:.2s}
-                    @keyframes burgerDrop{0%{transform:translate3d(0,-115vh,0) rotateY(165deg) rotateZ(-8deg) scale(.96);opacity:1}9%{transform:translate3d(0,-18px,0) rotateY(165deg) rotateZ(-4deg) scale(1);opacity:1}17%,25%{transform:translate3d(0,-18px,0) rotateY(165deg) rotateZ(2deg) scale(1);opacity:1}29%{transform:translate3d(0,-48px,0) rotateY(145deg) rotateZ(-8deg);opacity:1}34%{transform:translate3d(0,-12px,0) rotateY(90deg) rotateZ(14deg);opacity:1}39%{transform:translate3d(0,0,0) rotateY(20deg) rotateZ(82deg) scale(1,.78);opacity:1}42%{transform:translate3d(0,-18px,0) rotateY(0) rotateZ(-12deg) scale(1,1.08);opacity:1}46%{transform:translate3d(0,0,0) rotateY(0) rotateZ(4deg);opacity:1}50%,88%{transform:translate3d(0,0,0) rotateY(0) rotateZ(0);opacity:1}92%{transform:translate3d(100px,0,0) rotateY(0) rotateZ(8deg);opacity:1}100%{transform:translate3d(125vw,20px,0) rotateY(0) rotateZ(12deg);opacity:1}}
-                    @keyframes burgerRail{0%,27%{opacity:1;transform:scaleX(1)}34%,100%{opacity:0;transform:scaleX(.35)}}
-                    .burger-grip-arm{transform-box:fill-box;transform-origin:top right;animation:burgerGrip 15s ease-in-out both}
-                    @keyframes burgerGrip{0%,8%{transform:rotate(0)}13%,25%{transform:rotate(-142deg)}29%{transform:rotate(-118deg)}33%{transform:rotate(-82deg)}38%,50%{transform:rotate(0)}58%,65%{transform:rotate(18deg)}69%{transform:rotate(56deg)}74%,82%{transform:rotate(-84deg)}87%,100%{transform:rotate(0)}}
+                    @keyframes burgerDrop{0%{transform:translate3d(0,-115vh,0);opacity:1;animation-timing-function:cubic-bezier(.22,.61,.36,1)}32%{transform:translate3d(0,0,0);opacity:1}50%,88%{transform:translate3d(0,0,0);opacity:1}92%{transform:translate3d(100px,0,0);opacity:1}100%{transform:translate3d(125vw,0,0);opacity:1}}
+                    .burger-grip-arm{transform-box:fill-box;transform-origin:top right}
                     .burger-rub-arm{transform-box:fill-box;transform-origin:top left;animation:burgerRub 15s ease-in-out both}
                     @keyframes burgerRub{0%,47%,100%{transform:rotate(0)}51%,53%,56%,59%{transform:rotate(-68deg)}64%{transform:rotate(0)}68%,72%{transform:rotate(38deg)}76%,82%{transform:rotate(-76deg)}86%{transform:rotate(0)}}
                     .burger-head{transform-box:fill-box;transform-origin:center bottom;animation:burgerHead 15s ease-in-out both}
@@ -2039,12 +2036,11 @@
                     @keyframes burgerQR{0%,67%{left:27%;top:57%;opacity:0;transform:scale(.08) rotate(-12deg)}70%{left:31%;top:53%;opacity:1;transform:scale(.3) rotate(-5deg)}76%{left:43%;top:12%;opacity:1;transform:scale(1.08) rotate(3deg)}79%,84%{left:43%;top:12%;opacity:1;transform:scale(1) rotate(0)}88%{left:29%;top:55%;opacity:.75;transform:scale(.2) rotate(8deg)}91%,100%{left:27%;top:57%;opacity:0;transform:scale(.05) rotate(12deg)}}
                     @keyframes burgerCrumb{0%,8%{opacity:0;transform:translate(0,0) scale(.4) rotate(0)}15%{opacity:1}30%{opacity:.9;transform:translate(var(--dx),var(--dy)) scale(1.15) rotate(100deg)}42%,100%{opacity:0;transform:translate(calc(var(--dx)*1.4),calc(var(--dy)*1.3)) scale(.4) rotate(200deg)}}
                     @keyframes burgerPulse{to{transform:scale(1.12);opacity:.75}}
-                    @media(max-width:620px){.burger-scene{height:390px}.burger-person{left:5%;top:calc(50% - 185px);width:50vw}.burger-speech{left:35%;top:22%;width:60vw;padding:12px 15px}.burger-qr-card{left:38%;top:18%;width:45vw;padding:8px}.burger-qr-card strong{font-size:13px}}
+                    @media(max-width:620px){.burger-person{left:5%;width:50vw}.burger-speech{left:35%;top:22%;width:60vw;padding:12px 15px}.burger-qr-card{left:38%;top:18%;width:45vw;padding:8px}.burger-qr-card strong{font-size:13px}}
                     @media(prefers-reduced-motion:reduce){.burger-person,.burger-speech,.burger-qr-card,.burger-crumb,.burger-grip-arm,.burger-rub-arm,.burger-head{animation-duration:.01ms!important;animation-iteration-count:1!important}}
                 </style>
                 <div class="burger-scene">
                     <div class="burger-halo"></div>
-                    <div class="burger-rail"></div>
                     <span class="burger-crumb">🍟</span><span class="burger-crumb">✦</span><span class="burger-crumb">🍔</span>
                     <svg class="burger-person" viewBox="0 0 320 430" role="img" aria-label="Чиби в костюме бургера с красной прядью">
                         <defs>
@@ -2112,8 +2108,8 @@
                 html: html,
                 anim: anim,
                 scale: 1,
-                width: kind === 'burger-intro' ? '900px' : (kind === 'chibi-telegram' ? '920px' : '280px'),
-                height: kind === 'burger-intro' ? '480px' : (kind === 'chibi-telegram' ? '400px' : 'auto'),
+                width: kind === 'burger-intro' ? '1920px' : (kind === 'chibi-telegram' ? '920px' : '280px'),
+                height: kind === 'burger-intro' ? '1080px' : (kind === 'chibi-telegram' ? '400px' : 'auto'),
                 x: 50,
                 y: 50,
                 hidden: false
