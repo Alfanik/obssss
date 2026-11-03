@@ -311,7 +311,7 @@
                         </div>
 
                         <div>
-                            <input type="url" id="video-url-input" placeholder="Ссылка на MP4/WebM или YouTube" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition">
+                            <input type="url" id="video-url-input" placeholder="MP4/WebM, YouTube или TikTok (/video/ID)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition">
                         </div>
 
                         <div>
@@ -459,9 +459,14 @@
                         </div>
                     </div>
 
-                    <button onclick="openWidgetResizeModal()" class="w-full bg-slate-800 hover:bg-slate-700 border border-indigo-500/50 text-indigo-300 font-bold py-2.5 px-4 rounded-xl shadow transition text-xs flex items-center justify-center gap-2 cursor-pointer">
-                        <i class="fa-solid fa-arrows-up-down-left-right text-indigo-400"></i> Выдать размер (Растянуть / Расширить)
-                    </button>
+                    <div class="grid grid-cols-1 gap-2">
+                        <button onclick="openWidgetResizeModal()" class="w-full bg-slate-800 hover:bg-slate-700 border border-indigo-500/50 text-indigo-300 font-bold py-2.5 px-4 rounded-xl shadow transition text-xs flex items-center justify-center gap-2 cursor-pointer">
+                            <i class="fa-solid fa-arrows-up-down-left-right text-indigo-400"></i> Настроить размер
+                        </button>
+                        <button onclick="setWidgetFullscreen()" class="w-full bg-indigo-700 hover:bg-indigo-600 border border-indigo-400/50 text-white font-bold py-2.5 px-4 rounded-xl shadow transition text-xs flex items-center justify-center gap-2 cursor-pointer">
+                            <i class="fa-solid fa-expand"></i> Сделать во весь экран (1920×1080)
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -1356,6 +1361,16 @@
                 let host = parsed.hostname.toLowerCase();
                 if (host.startsWith('www.')) host = host.slice(4);
                 const pathParts = parsed.pathname.split('/').filter(Boolean);
+
+                if (host === 'tiktok.com' || host.endsWith('.tiktok.com')) {
+                    const match = parsed.pathname.match(/\/video\/(\d+)/);
+                    if (!match) return null;
+                    return {
+                        type: 'tiktok',
+                        url: `https://www.tiktok.com/player/v1/${match[1]}?autoplay=1&controls=1&loop=1`
+                    };
+                }
+
                 let videoId = '';
                 if (host === 'youtu.be') videoId = pathParts[0] || '';
                 else if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtube-nocookie.com') {
@@ -1373,7 +1388,15 @@
             const rawUrl = document.getElementById('video-url-input').value.trim();
             if (!rawUrl) return showToast('Укажите URL видео', 'warning');
             const media = parseMediaUrl(rawUrl);
-            if (!media) return showToast('Проверьте ссылку на видео', 'warning');
+            if (!media) {
+                let isTikTokLink = false;
+                try {
+                    isTikTokLink = new URL(rawUrl).hostname.toLowerCase().endsWith('tiktok.com');
+                } catch (error) {}
+                return showToast(isTikTokLink
+                    ? 'TikTok: используйте полную ссылку вида tiktok.com/@user/video/ID; короткие ссылки vm.tiktok.com не поддерживаются'
+                    : 'Проверьте ссылку на видео', 'warning');
+            }
             activeOverlays.push({
                 id: 'vid_' + Date.now(),
                 type: media.type,
@@ -1478,6 +1501,15 @@
             }
 
             document.getElementById('bw-prev-text').innerText = textVal;
+        }
+
+        function setWidgetFullscreen() {
+            builderWidgetWidth = 1920;
+            builderWidgetHeight = 1080;
+            updateBuilderPreview();
+            const resizeModal = document.getElementById('widget-resize-modal');
+            if (!resizeModal.classList.contains('hidden')) updateResizeFramePreview();
+            showToast('Размер виджета установлен: 1920×1080');
         }
 
         function openWidgetResizeModal() {
@@ -2048,7 +2080,7 @@
 
         function isSameMediaSource(node, item) {
             if (!node || !item.url) return false;
-            const tagName = item.type === 'image' ? 'img' : (item.type === 'video' ? 'video' : (item.type === 'youtube' ? 'iframe' : ''));
+            const tagName = item.type === 'image' ? 'img' : (item.type === 'video' ? 'video' : (item.type === 'youtube' || item.type === 'tiktok' ? 'iframe' : ''));
             const mediaNode = tagName ? node.querySelector(tagName) : null;
             return Boolean(mediaNode && mediaNode.getAttribute('src') === item.url);
         }
@@ -2148,6 +2180,8 @@
                 contentHtml = `<video src="${escapeHtml(item.url)}" autoplay loop playsinline preload="auto" class="max-w-[500px] rounded-2xl shadow-2xl" onloadedmetadata="this.volume=${item.volume ?? 0.8};"></video>`;
             } else if (item.type === 'youtube') {
                 contentHtml = `<iframe src="${escapeHtml(item.url)}" class="w-[500px] h-[281px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+            } else if (item.type === 'tiktok') {
+                contentHtml = `<iframe src="${escapeHtml(item.url)}" class="w-[325px] h-[578px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
             } else if (item.type === 'widget') {
                 contentHtml = item.html;
             }
@@ -2183,10 +2217,10 @@
                     <div class="bg-slate-900 border border-slate-700 p-2.5 rounded-xl flex items-center justify-between text-xs transition hover:border-slate-600">
                         <div class="flex items-center gap-3 overflow-hidden mr-2">
                             <div class="w-7 h-7 rounded-lg bg-indigo-950 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold shrink-0">
-                                ${item.type === 'text' ? '<i class="fa-solid fa-font"></i>' : (item.type === 'image' ? '<i class="fa-solid fa-image"></i>' : (item.type === 'video' || item.type === 'youtube' ? '<i class="fa-solid fa-video"></i>' : '<i class="fa-solid fa-shapes"></i>'))}
+                                ${item.type === 'text' ? '<i class="fa-solid fa-font"></i>' : (item.type === 'image' ? '<i class="fa-solid fa-image"></i>' : (item.type === 'video' || item.type === 'youtube' || item.type === 'tiktok' ? '<i class="fa-solid fa-video"></i>' : '<i class="fa-solid fa-shapes"></i>'))}
                             </div>
                             <div class="truncate">
-                                <div class="font-semibold text-slate-200 truncate ${item.hidden ? 'line-through text-slate-500' : ''}">${escapeHtml(item.title || item.content || (item.type === 'video' || item.type === 'youtube' ? 'Видео' : (item.type === 'image' ? 'Изображение' : 'Элемент')))}</div>
+                                <div class="font-semibold text-slate-200 truncate ${item.hidden ? 'line-through text-slate-500' : ''}">${escapeHtml(item.title || item.content || (item.type === 'video' || item.type === 'youtube' || item.type === 'tiktok' ? 'Видео' : (item.type === 'image' ? 'Изображение' : 'Элемент')))}</div>
                                 <div class="text-[10px] text-slate-500">X: ${Math.round(item.x)}% Y: ${Math.round(item.y)}% | Масштаб: ${Math.round((item.scale || 1) * 100)}%</div>
                             </div>
                         </div>
