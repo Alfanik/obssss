@@ -525,6 +525,7 @@
         const MODERATOR_EMAILS = { alfanik: 'fnafik.red@mail.ru', cherry: 'girl_love_2018@mail.ru' };
         const VOICE_RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let moderatorAuth = null;
+        let overlayAuth = null;
         let authRefreshPromise = null;
         let moderatorPresenceId = null;
         let presenceListFetchPending = false;
@@ -623,16 +624,76 @@
             return authRefreshPromise;
         }
 
+        function saveOverlayAuth(auth) {
+            overlayAuth = {
+                idToken: auth.idToken,
+                refreshToken: auth.refreshToken,
+                expiresAt: Date.now() + Number(auth.expiresIn || 3600) * 1000
+            };
+            localStorage.setItem('obs_overlay_auth', JSON.stringify(overlayAuth));
+        }
+
+        async function refreshOverlayAuth() {
+            if (!overlayAuth?.refreshToken) return false;
+            try {
+                const response = await fetch(`${FIREBASE_TOKEN_URL}/token?key=${FIREBASE_API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: overlayAuth.refreshToken })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error?.message || 'Не удалось продлить сессию OBS');
+                saveOverlayAuth({ idToken: data.id_token, refreshToken: data.refresh_token, expiresIn: data.expires_in });
+                return true;
+            } catch (error) {
+                overlayAuth = null;
+                localStorage.removeItem('obs_overlay_auth');
+                return false;
+            }
+        }
+
+        async function ensureOverlayAuth() {
+            try {
+                overlayAuth = JSON.parse(localStorage.getItem('obs_overlay_auth') || 'null');
+            } catch (error) {
+                overlayAuth = null;
+            }
+            if (overlayAuth?.idToken && overlayAuth.expiresAt > Date.now() + 60000) return true;
+            if (overlayAuth?.refreshToken && await refreshOverlayAuth()) return true;
+            try {
+                const response = await fetch(`${FIREBASE_AUTH_URL}/accounts:signUp?key=${FIREBASE_API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ returnSecureToken: true })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error?.message || 'Anonymous sign-in failed');
+                saveOverlayAuth(data);
+                return true;
+            } catch (error) {
+                console.error('Не удалось подготовить OBS-оверлей без входа модератора:', error);
+                const status = document.createElement('div');
+                status.className = 'fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-6 text-center text-sm text-white';
+                status.textContent = 'Не удалось подключиться к Firebase. Включите Anonymous sign-in и проверьте правила Realtime Database.';
+                document.body.appendChild(status);
+                return false;
+            }
+        }
+
         async function firebaseFetch(url, options = {}) {
             const requestUrl = new URL(url, window.location.href);
             if (requestUrl.hostname.endsWith('firebaseio.com')) {
-                if (moderatorAuth && moderatorAuth.expiresAt < Date.now() + 60000) {
+                const isOverlay = document.body.classList.contains('obs-overlay-mode');
+                if (isOverlay && overlayAuth && overlayAuth.expiresAt < Date.now() + 60000) {
+                    await refreshOverlayAuth();
+                } else if (!isOverlay && moderatorAuth && moderatorAuth.expiresAt < Date.now() + 60000) {
                     await refreshModeratorAuth();
                 }
-                if (!moderatorAuth?.idToken) {
-                    throw new Error('Сначала войдите в аккаунт модератора');
+                const idToken = isOverlay ? overlayAuth?.idToken : moderatorAuth?.idToken;
+                if (!idToken) {
+                    throw new Error(isOverlay ? 'Не удалось подключить анонимную сессию OBS' : 'Сначала войдите в аккаунт модератора');
                 }
-                requestUrl.searchParams.set('auth', moderatorAuth.idToken);
+                requestUrl.searchParams.set('auth', idToken);
             }
             return fetch(requestUrl.toString(), options);
         }
@@ -642,8 +703,8 @@
         }
 
         function startModeratorPresence() {
-            if (document.body.classList.contains('obs-overlay-mode') || !moderatorAuth?.uid || moderatorPresenceId) return;
-            moderatorPresenceId = `${moderatorAuth.uid}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            if (document.body.classList.contains('obs-overlay-mode') || !moderatorAuth?.idToken || moderatorPresenceId) return;
+            moderatorPresenceId = `${String(moderatorAuth.username || 'moderator').toLowerCase()}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
             const heartbeat = () => firebaseFetch(moderatorPresenceEntryUrl(), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -675,6 +736,8 @@
                 }
             } catch (error) {
                 console.error('Ошибка списка модераторов:', error);
+                const list = document.getElementById('moderator-presence-list');
+                if (list) list.textContent = 'Не удалось загрузить список. Проверьте правила Firebase.';
             } finally {
                 presenceListFetchPending = false;
             }
@@ -790,8 +853,13 @@
             const urlParams = new URLSearchParams(window.location.search);
             const modeParam = urlParams.get('mode');
 
-            if (modeParam === 'overlay') switchView('overlay');
-            if (!await ensureModeratorAuth()) return;
+            const isOverlay = modeParam === 'overlay';
+            if (isOverlay) {
+                switchView('overlay');
+                if (!await ensureOverlayAuth()) return;
+            } else if (!await ensureModeratorAuth()) {
+                return;
+            }
             renderCustomWidgetsMenu();
 
             if (modeParam === 'overlay') {
@@ -1023,11 +1091,23 @@
             cloudStateFetchPending = true;
 
             firebaseFetch(FIREBASE_DB_URL, { cache: 'no-store' })
-                .then(res => res.json())
+                .then(res => {
+                    if (!res.ok) throw new Error(`Firebase HTTP ${res.status}`);
+                    return res.json();
+                })
                 .then(data => {
                     let newData = [];
-                    if (data && Array.isArray(data)) newData = data;
-                    else if (data && typeof data === 'object') newData = Object.values(data);
+                    if (Array.isArray(data)) {
+                        newData = data;
+                    } else if (data && typeof data === 'object') {
+                        if (data.error) throw new Error(`Firebase: ${data.error}`);
+                        newData = Object.values(data);
+                    } else if (data !== null) {
+                        throw new Error('Некорректный формат состояния оверлея');
+                    }
+                    if (!newData.every(item => item && typeof item === 'object' && !Array.isArray(item) && typeof item.id === 'string' && typeof item.type === 'string')) {
+                        throw new Error('В Firebase найдено состояние с неизвестным форматом; локальный список сохранён');
+                    }
                     const previousItems = new Map(activeOverlays.map(item => [item.id, item]));
                     newData = newData.map(item => {
                         const previous = item && previousItems.get(item.id);
@@ -1756,10 +1836,20 @@
             moderatorMicSessionId = sessionId;
             updateMicButton('connecting');
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
+                const mediaRequest = navigator.mediaDevices.getUserMedia({
                     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
                     video: false
                 });
+                mediaRequest.then(lateStream => {
+                    if (moderatorMicSessionId !== sessionId) lateStream.getTracks().forEach(track => track.stop());
+                }).catch(() => {});
+                let micPermissionTimer;
+                const stream = await Promise.race([
+                    mediaRequest,
+                    new Promise((_, reject) => {
+                        micPermissionTimer = setTimeout(() => reject(Object.assign(new Error('Истекло время ожидания разрешения микрофона'), { name: 'MicTimeoutError' })), 15000);
+                    })
+                ]).finally(() => clearTimeout(micPermissionTimer));
                 if (moderatorMicSessionId !== sessionId) {
                     stream.getTracks().forEach(track => track.stop());
                     return;
@@ -1796,13 +1886,15 @@
                 console.error('Ошибка подключения микрофона:', error);
                 showToast(error.name === 'NotAllowedError'
                     ? 'Разрешите доступ к микрофону в браузере'
-                    : 'Не удалось включить микрофон; проверьте подключение OBS', 'warning');
+                    : (error.name === 'MicTimeoutError'
+                        ? 'Браузер не ответил на запрос микрофона. Разрешите его в настройках сайта и попробуйте снова'
+                        : 'Не удалось включить микрофон; проверьте подключение OBS и правила Firebase'), 'warning');
                 if (moderatorMicSessionId === sessionId) stopModeratorMic();
             }
         }
 
         async function waitForVoiceAnswer(sessionId, connection) {
-            for (let attempt = 0; attempt < 60; attempt++) {
+            for (let attempt = 0; attempt < 30; attempt++) {
                 if (moderatorMicSessionId !== sessionId) return;
                 const response = await firebaseFetch(voiceSessionUrl(sessionId), { cache: 'no-store' });
                 if (!response.ok) throw new Error(`Firebase HTTP ${response.status}`);
@@ -1814,7 +1906,7 @@
                 }
                 await new Promise(resolve => setTimeout(resolve, 800));
             }
-            throw new Error('OBS did not answer');
+            throw new Error('OBS не ответил за 24 секунды. Проверьте, что источник OBS открыт и правила Firebase разрешают obs_voice.');
         }
 
         function stopModeratorMic() {
