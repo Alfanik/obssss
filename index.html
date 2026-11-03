@@ -210,6 +210,9 @@
                         <button id="tab-btn-widgets" onclick="switchControlTab('widgets')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-shapes text-amber-400"></i> Виджеты
                         </button>
+                        <button id="tab-btn-sounds" onclick="switchControlTab('sounds')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
+                            <i class="fa-solid fa-volume-high text-pink-400"></i> Звуки
+                        </button>
                     </div>
 
                     <!-- TAB 1: TEXT -->
@@ -378,6 +381,17 @@
                         </button>
                     </div>
 
+                    <div id="tab-content-sounds" class="space-y-3 hidden">
+                        <div class="flex items-center justify-between gap-2">
+                            <label class="block text-xs font-semibold text-slate-300">Мои звуки</label>
+                            <button onclick="openSoundBuilderModal()" class="bg-pink-600 hover:bg-pink-500 text-white font-bold py-2 px-3 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer">
+                                <i class="fa-solid fa-plus"></i> Добавить звук
+                            </button>
+                        </div>
+                        <div id="custom-sounds-container" class="space-y-2"></div>
+                        <p id="custom-sounds-owner" class="text-[10px] text-slate-500"></p>
+                    </div>
+
                 </div>
 
             </div>
@@ -482,6 +496,41 @@
         </div>
     </div>
 
+    <!-- ОКНО ДОБАВЛЕНИЯ ЛИЧНОГО ЗВУКА -->
+    <div id="sound-builder-modal" class="hidden fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-obs-card border border-obs-border rounded-2xl w-full max-w-md p-6 shadow-2xl flex flex-col gap-5">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-4">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-volume-high text-pink-400"></i> Добавить свой звук
+                </h3>
+                <button onclick="closeSoundBuilderModal()" class="text-slate-400 hover:text-white text-lg cursor-pointer" aria-label="Закрыть">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Название звука</label>
+                <input id="sound-name-input" type="text" placeholder="Например: Победа" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Аудиофайл</label>
+                <input id="sound-file-input" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-300 file:bg-pink-600 file:text-white file:rounded-lg file:border-0 file:py-1 file:px-3 file:text-xs file:font-semibold cursor-pointer">
+            </div>
+            <div>
+                <div class="flex justify-between items-center mb-1">
+                    <label for="sound-volume-input" class="text-xs font-semibold text-slate-300">Громкость</label>
+                    <span id="sound-volume-label" class="text-xs text-pink-300 font-mono">80%</span>
+                </div>
+                <input id="sound-volume-input" type="range" min="0" max="100" value="80" oninput="document.getElementById('sound-volume-label').innerText = this.value + '%'" class="w-full accent-pink-500">
+            </div>
+            <div class="flex gap-2">
+                <button onclick="closeSoundBuilderModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-2.5 rounded-xl text-xs cursor-pointer">Отмена</button>
+                <button onclick="saveCustomSound()" class="flex-1 bg-pink-600 hover:bg-pink-500 text-white font-bold py-2.5 rounded-xl text-xs cursor-pointer">
+                    <i class="fa-solid fa-check mr-1"></i> Сохранить звук
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- МОДАЛЬНОЕ ОКНО РАСШИРЕНИЯ / ВЫТЯГИВАНИЯ ВИДЖЕТА -->
     <div id="widget-resize-modal" class="hidden fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
         <div class="bg-obs-card border border-obs-border rounded-2xl w-full max-w-xl p-6 shadow-2xl flex flex-col gap-5">
@@ -522,6 +571,7 @@
         const FIREBASE_DB_URL = "https://alfanik-ac5d7-default-rtdb.firebaseio.com/obs_state.json";
         const FIREBASE_FAST_UPDATES_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_fast_updates');
         const FIREBASE_ASSETS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_assets');
+        const FIREBASE_MODERATOR_SOUNDS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_moderator_sounds');
         const FIREBASE_VOICE_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_voice');
         const FIREBASE_PRESENCE_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_moderators/online');
         const FIREBASE_API_KEY = 'AIzaSyCfffBZIVTv9quqZ2JFj44kDF05GdVOhbk';
@@ -538,6 +588,9 @@
 
         let activeOverlays = [];
         let customWidgetsList = JSON.parse(localStorage.getItem('obs_custom_widgets') || '[]');
+        let customSoundsList = [];
+        let customSoundsOwnerUid = '';
+        let customSoundsLoaded = false;
         let liveTextItemId = null;
 
         let isDragging = false;
@@ -924,6 +977,7 @@
                 hidden: item.hidden,
                 html: item.html,
                 title: item.title,
+                customWidgetId: item.customWidgetId,
                 volume: item.volume
             };
             if (typeof cleanItem.url === 'string' && cleanItem.url.startsWith('data:')) {
@@ -1589,7 +1643,7 @@
                 </div>
             `;
 
-            const newCustomWidget = { id: 'cw_' + Date.now(), name, html, anim, scale: 1 };
+            const newCustomWidget = { id: 'cw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), name, html, anim, scale: 1 };
             customWidgetsList.push(newCustomWidget);
             localStorage.setItem('obs_custom_widgets', JSON.stringify(customWidgetsList));
 
@@ -1621,15 +1675,17 @@
         function sendCustomWidget(id) {
             const w = customWidgetsList.find(item => item.id === id);
             if (!w) return;
+            const widgetCount = activeOverlays.filter(item => item.type === 'widget').length;
             activeOverlays.push({
-                id: 'custom_widget_' + Date.now(),
+                id: 'custom_widget_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+                customWidgetId: w.id,
                 type: 'widget',
                 title: w.name,
                 html: w.html,
                 anim: w.anim,
                 scale: 1,
-                x: 50,
-                y: 50,
+                x: 38 + (widgetCount % 4) * 8,
+                y: 38 + (Math.floor(widgetCount / 4) % 4) * 8,
                 hidden: false
             });
             saveAndBroadcast();
@@ -1638,10 +1694,201 @@
         }
 
         function deleteCustomWidget(id) {
+            const widget = customWidgetsList.find(item => item.id === id);
             customWidgetsList = customWidgetsList.filter(item => item.id !== id);
+            const previousOverlayCount = activeOverlays.length;
+            activeOverlays = activeOverlays.filter(item => {
+                if (item.type !== 'widget') return true;
+                if (item.customWidgetId) return item.customWidgetId !== id;
+                return !widget || item.title !== widget.name;
+            });
+
             localStorage.setItem('obs_custom_widgets', JSON.stringify(customWidgetsList));
             renderCustomWidgetsMenu();
-            showToast('Виджет удален из списка');
+            if (activeOverlays.length !== previousOverlayCount) {
+                saveAndBroadcast();
+                renderOverlays();
+            }
+            showToast('Виджет удален из списка и с экрана');
+        }
+
+        function moderatorSoundsUrl(uid = moderatorAuth?.uid) {
+            return uid ? `${FIREBASE_MODERATOR_SOUNDS_URL}/${encodeURIComponent(uid)}.json` : '';
+        }
+
+        function openSoundBuilderModal() {
+            if (!moderatorAuth?.uid) return showToast('Сначала войдите в аккаунт модератора', 'warning');
+            document.getElementById('sound-builder-modal').classList.remove('hidden');
+        }
+
+        function closeSoundBuilderModal() {
+            document.getElementById('sound-builder-modal').classList.add('hidden');
+        }
+
+        async function loadModeratorSounds() {
+            const ownerUid = moderatorAuth?.uid;
+            if (!ownerUid) {
+                customSoundsList = [];
+                customSoundsOwnerUid = '';
+                customSoundsLoaded = false;
+                renderCustomSoundsMenu();
+                return;
+            }
+            if (customSoundsLoaded && customSoundsOwnerUid === ownerUid) return;
+
+            customSoundsOwnerUid = ownerUid;
+            customSoundsLoaded = false;
+            const container = document.getElementById('custom-sounds-container');
+            if (container) container.innerHTML = '<div class="text-xs text-slate-500 py-3 text-center">Загружаю звуки…</div>';
+
+            try {
+                const response = await firebaseFetch(moderatorSoundsUrl(ownerUid), { cache: 'no-store' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const savedSounds = await response.json();
+                const sounds = Array.isArray(savedSounds) ? savedSounds : [];
+                const loadedSounds = await Promise.all(sounds.map(async sound => {
+                    if (!sound?.assetKey) return sound;
+                    const assetResponse = await firebaseFetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(sound.assetKey)}.json`, { cache: 'force-cache' });
+                    if (!assetResponse.ok) throw new Error(`HTTP ${assetResponse.status}`);
+                    return { ...sound, url: await assetResponse.json() };
+                }));
+                if (moderatorAuth?.uid !== ownerUid) return;
+                customSoundsList = loadedSounds.filter(sound => typeof sound?.url === 'string');
+                customSoundsOwnerUid = ownerUid;
+                customSoundsLoaded = true;
+                renderCustomSoundsMenu();
+            } catch (error) {
+                console.error('Не удалось загрузить личные звуки:', error);
+                if (moderatorAuth?.uid === ownerUid) {
+                    customSoundsList = [];
+                    customSoundsOwnerUid = ownerUid;
+                    customSoundsLoaded = false;
+                    renderCustomSoundsMenu();
+                    showToast('Не удалось загрузить звуки модератора', 'warning');
+                }
+            }
+        }
+
+        function renderCustomSoundsMenu() {
+            const container = document.getElementById('custom-sounds-container');
+            const ownerLabel = document.getElementById('custom-sounds-owner');
+            if (!container) return;
+            if (ownerLabel) ownerLabel.innerText = moderatorAuth?.username
+                ? `Личный список: ${moderatorAuth.username}`
+                : 'Войдите в аккаунт модератора, чтобы открыть личный список';
+            if (!moderatorAuth?.uid) {
+                container.innerHTML = '<div class="text-xs text-slate-500 py-3 text-center">Нужен вход модератора</div>';
+                return;
+            }
+            if (!customSoundsLoaded) {
+                container.innerHTML = '<div class="text-xs text-slate-500 py-3 text-center">Звуки пока не загружены</div>';
+                return;
+            }
+            if (customSoundsList.length === 0) {
+                container.innerHTML = '<div class="text-xs text-slate-500 py-3 text-center border border-dashed border-slate-700 rounded-xl">Добавьте первый звук</div>';
+                return;
+            }
+            container.innerHTML = customSoundsList.map(sound => `
+                <div class="flex items-center gap-2 bg-slate-900 border border-slate-700 p-2 rounded-xl text-xs">
+                    <button onclick="playCustomSound('${escapeHtml(sound.id)}')" class="flex-1 min-w-0 text-left font-semibold text-pink-300 hover:text-pink-200 truncate cursor-pointer">
+                        <i class="fa-solid fa-play mr-1.5"></i>${escapeHtml(sound.name)} <span class="text-slate-500 font-normal">(${Math.round((sound.volume ?? 0.8) * 100)}%)</span>
+                    </button>
+                    <button onclick="deleteCustomSound('${escapeHtml(sound.id)}')" class="text-slate-400 hover:text-red-400 p-1 cursor-pointer" title="Удалить звук">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            `).join('');
+        }
+
+        async function saveCustomSound() {
+            const fileInput = document.getElementById('sound-file-input');
+            const file = fileInput.files[0];
+            const ownerUid = moderatorAuth?.uid;
+            if (!ownerUid) return showToast('Сначала войдите в аккаунт модератора', 'warning');
+            if (!file) return showToast('Выберите аудиофайл', 'warning');
+
+            const button = document.querySelector('#sound-builder-modal button[onclick="saveCustomSound()"]');
+            if (button) button.disabled = true;
+            try {
+                const url = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = () => reject(reader.error || new Error('Не удалось прочитать аудиофайл'));
+                    reader.readAsDataURL(file);
+                });
+                const id = 'sound_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+                const sound = {
+                    id,
+                    name: document.getElementById('sound-name-input').value.trim() || file.name.replace(/\.[^.]+$/, ''),
+                    assetKey: id,
+                    url,
+                    volume: Number(document.getElementById('sound-volume-input').value) / 100
+                };
+                await uploadMediaAsset(sound);
+                const nextSounds = [...customSoundsList, sound];
+                const metadata = nextSounds.map(({ url: soundUrl, ...item }) => item);
+                const response = await firebaseFetch(moderatorSoundsUrl(ownerUid), {
+                    method: 'PUT',
+                    body: JSON.stringify(metadata),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (moderatorAuth?.uid !== ownerUid) return;
+                customSoundsList = nextSounds;
+                customSoundsOwnerUid = ownerUid;
+                customSoundsLoaded = true;
+                document.getElementById('sound-name-input').value = '';
+                fileInput.value = '';
+                closeSoundBuilderModal();
+                renderCustomSoundsMenu();
+                showToast('Звук сохранен в личный список');
+            } catch (error) {
+                console.error('Не удалось сохранить звук:', error);
+                showToast('Не удалось сохранить звук. Проверьте подключение Firebase.', 'warning');
+            } finally {
+                if (button) button.disabled = false;
+            }
+        }
+
+        function playCustomSound(id) {
+            const sound = customSoundsList.find(item => item.id === id);
+            if (!sound?.url) return showToast('Аудиофайл еще не загружен', 'warning');
+            activeOverlays.push({
+                id: 'sound_play_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+                type: 'audio',
+                title: sound.name,
+                url: sound.url,
+                assetKey: sound.assetKey,
+                volume: sound.volume ?? 0.8,
+                x: 50,
+                y: 50,
+                hidden: false
+            });
+            saveAndBroadcast();
+            renderOverlays();
+            showToast(`Звук «${sound.name}» отправлен в OBS`);
+        }
+
+        async function deleteCustomSound(id) {
+            const ownerUid = moderatorAuth?.uid;
+            if (!ownerUid) return showToast('Сначала войдите в аккаунт модератора', 'warning');
+            const nextSounds = customSoundsList.filter(sound => sound.id !== id);
+            try {
+                const metadata = nextSounds.map(({ url, ...item }) => item);
+                const response = await firebaseFetch(moderatorSoundsUrl(ownerUid), {
+                    method: 'PUT',
+                    body: JSON.stringify(metadata),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (moderatorAuth?.uid !== ownerUid) return;
+                customSoundsList = nextSounds;
+                renderCustomSoundsMenu();
+                showToast('Звук удален из личного списка');
+            } catch (error) {
+                console.error('Не удалось удалить личный звук:', error);
+                showToast('Не удалось удалить звук из Firebase', 'warning');
+            }
         }
 
         function handleCanvasWheel(e) {
@@ -2187,6 +2434,17 @@
             }
 
             node.innerHTML = contentHtml;
+            if (item.type === 'audio' && !isInteractive) {
+                const audio = document.createElement('audio');
+                audio.src = item.url || '';
+                audio.volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.8)));
+                audio.autoplay = true;
+                audio.preload = 'auto';
+                audio.style.display = 'none';
+                audio.addEventListener('ended', () => removeOverlayItem(item.id), { once: true });
+                node.appendChild(audio);
+                audio.play().catch(error => console.error('OBS не смог воспроизвести звук:', error));
+            }
             if (isInteractive) {
                 [
                     ['horizontal', 'right-0 top-1/2 -translate-y-1/2 cursor-ew-resize'],
@@ -2217,7 +2475,7 @@
                     <div class="bg-slate-900 border border-slate-700 p-2.5 rounded-xl flex items-center justify-between text-xs transition hover:border-slate-600">
                         <div class="flex items-center gap-3 overflow-hidden mr-2">
                             <div class="w-7 h-7 rounded-lg bg-indigo-950 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold shrink-0">
-                                ${item.type === 'text' ? '<i class="fa-solid fa-font"></i>' : (item.type === 'image' ? '<i class="fa-solid fa-image"></i>' : (item.type === 'video' || item.type === 'youtube' || item.type === 'tiktok' ? '<i class="fa-solid fa-video"></i>' : '<i class="fa-solid fa-shapes"></i>'))}
+                                ${item.type === 'text' ? '<i class="fa-solid fa-font"></i>' : (item.type === 'audio' ? '<i class="fa-solid fa-volume-high"></i>' : (item.type === 'image' ? '<i class="fa-solid fa-image"></i>' : (item.type === 'video' || item.type === 'youtube' || item.type === 'tiktok' ? '<i class="fa-solid fa-video"></i>' : '<i class="fa-solid fa-shapes"></i>'))) }
                             </div>
                             <div class="truncate">
                                 <div class="font-semibold text-slate-200 truncate ${item.hidden ? 'line-through text-slate-500' : ''}">${escapeHtml(item.title || item.content || (item.type === 'video' || item.type === 'youtube' || item.type === 'tiktok' ? 'Видео' : (item.type === 'image' ? 'Изображение' : 'Элемент')))}</div>
@@ -2262,7 +2520,7 @@
         }
 
         function switchControlTab(tab) {
-            ['text', 'image', 'video', 'widgets'].forEach(t => {
+            ['text', 'image', 'video', 'widgets', 'sounds'].forEach(t => {
                 const btn = document.getElementById(`tab-btn-${t}`);
                 const content = document.getElementById(`tab-content-${t}`);
                 if (t === tab) {
@@ -2275,6 +2533,7 @@
                     content.classList.add('hidden');
                 }
             });
+            if (tab === 'sounds') loadModeratorSounds();
         }
 
         function copyOverlayLink() {
