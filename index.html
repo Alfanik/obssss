@@ -577,6 +577,7 @@
         const FIREBASE_MODERATOR_SOUNDS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_moderator_sounds');
         const FIREBASE_MODERATOR_WIDGETS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_assets');
         const FIREBASE_VOICE_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_voice');
+        const FIREBASE_SOUND_EVENTS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_sound_events');
         const FIREBASE_PRESENCE_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_moderators/online');
         const FIREBASE_API_KEY = 'AIzaSyCfffBZIVTv9quqZ2JFj44kDF05GdVOhbk';
         const FIREBASE_AUTH_URL = 'https://identitytoolkit.googleapis.com/v1';
@@ -769,6 +770,10 @@
         let overlayStateStream = null;
         let overlayFastUpdatesStream = null;
         let overlayVoiceStream = null;
+        let overlaySoundEventsStream = null;
+        let soundEventsFetchPending = false;
+        const handledSoundEventIds = new Set();
+        const pendingSoundAssetLoads = new Map();
         let cloudSaveQueue = Promise.resolve();
         const uploadedMediaAssetKeys = new Set();
         const pendingMediaAssetUploads = new Map();
@@ -974,6 +979,11 @@
                 `${FIREBASE_VOICE_URL}/sessions`,
                 () => pollVoiceOffers()
             );
+            overlaySoundEventsStream = openOverlayRealtimeStream(
+                FIREBASE_SOUND_EVENTS_URL,
+                () => fetchOverlaySoundEvents()
+            );
+            fetchOverlaySoundEvents();
 
             setInterval(() => {
                 if (!overlayStateStream?.connected) fetchStateFromCloud();
@@ -983,6 +993,9 @@
             }, 1000);
             setInterval(() => {
                 if (!overlayVoiceStream?.connected) pollVoiceOffers();
+            }, 1000);
+            setInterval(() => {
+                if (!overlaySoundEventsStream?.connected) fetchOverlaySoundEvents();
             }, 1000);
         }
 
@@ -2322,23 +2335,30 @@
             }
         }
 
-        function playCustomSound(id) {
+        async function playCustomSound(id) {
             const sound = customSoundsList.find(item => item.id === id);
-            if (!sound?.url) return showToast('Аудиофайл еще не загружен', 'warning');
-            activeOverlays.push({
-                id: 'sound_play_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-                type: 'audio',
-                title: sound.name,
-                url: sound.url,
-                assetKey: sound.assetKey,
-                volume: sound.volume ?? 0.8,
-                x: 50,
-                y: 50,
-                hidden: false
-            });
-            saveAndBroadcast();
-            renderOverlays();
-            showToast(`Звук «${sound.name}» отправлен в OBS`);
+            if (!sound?.assetKey) return showToast('Аудиофайл еще не загружен', 'warning');
+
+            const eventId = window.crypto && crypto.randomUUID
+                ? crypto.randomUUID()
+                : `sound_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            try {
+                const response = await firebaseFetch(`${FIREBASE_SOUND_EVENTS_URL}/${encodeURIComponent(eventId)}.json`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        assetKey: sound.assetKey,
+                        title: sound.name,
+                        volume: sound.volume ?? 0.8,
+                        createdAt: Date.now()
+                    })
+                });
+                if (!response.ok) throw await getFirebaseError(response);
+                showToast(`Звук «${sound.name}» отправлен в OBS`);
+            } catch (error) {
+                console.error('Не удалось отправить звук в OBS:', error);
+                showToast(`Не удалось отправить звук: ${error.message}`, 'warning');
+            }
         }
 
         async function deleteCustomSound(id) {
@@ -2682,6 +2702,92 @@
             if (sessionId) {
                 firebaseFetch(voiceSessionUrl(sessionId), { method: 'DELETE' })
                     .catch(error => console.error('Ошибка остановки микрофона:', error));
+            }
+        }
+
+        function loadSoundEventAsset(assetKey) {
+            if (loadedMediaAssets.has(assetKey)) return Promise.resolve(loadedMediaAssets.get(assetKey));
+            if (pendingSoundAssetLoads.has(assetKey)) return pendingSoundAssetLoads.get(assetKey);
+
+            const load = firebaseFetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json`, { cache: 'force-cache' })
+                .then(async response => {
+                    if (!response.ok) throw await getFirebaseError(response);
+                    return response.json();
+                })
+                .then(url => {
+                    if (typeof url !== 'string') throw new Error('В Firebase не найден аудиофайл');
+                    loadedMediaAssets.set(assetKey, url);
+                    return url;
+                })
+                .finally(() => pendingSoundAssetLoads.delete(assetKey));
+            pendingSoundAssetLoads.set(assetKey, load);
+            return load;
+        }
+
+        async function playOverlaySoundEvent(eventId, soundEvent) {
+            const url = await loadSoundEventAsset(soundEvent.assetKey);
+            if (!document.body.classList.contains('obs-overlay-mode')) return;
+
+            const audio = document.createElement('audio');
+            audio.src = url;
+            audio.volume = Math.max(0, Math.min(1, Number(soundEvent.volume ?? 0.8)));
+            audio.preload = 'auto';
+            audio.playsInline = true;
+            audio.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;';
+            audio.addEventListener('ended', () => audio.remove(), { once: true });
+            document.body.appendChild(audio);
+            audio.load();
+
+            try {
+                let attempt = 0;
+                while (attempt < 5) {
+                    attempt++;
+                    try {
+                        await audio.play();
+                        break;
+                    } catch (error) {
+                        if (attempt === 5) throw error;
+                        await new Promise(resolve => setTimeout(resolve, attempt * 200));
+                    }
+                }
+            } catch (error) {
+                audio.pause();
+                audio.remove();
+                throw error;
+            }
+
+            firebaseFetch(`${FIREBASE_SOUND_EVENTS_URL}/${encodeURIComponent(eventId)}.json`, { method: 'DELETE' })
+                .then(async response => {
+                    if (!response.ok) throw await getFirebaseError(response);
+                })
+                .catch(error => console.error('Звук запущен, но событие не удалось подтвердить в Firebase:', error));
+        }
+
+        async function fetchOverlaySoundEvents() {
+            if (!document.body.classList.contains('obs-overlay-mode') || soundEventsFetchPending) return;
+            soundEventsFetchPending = true;
+            try {
+                const response = await firebaseFetch(`${FIREBASE_SOUND_EVENTS_URL}.json`, { cache: 'no-store' });
+                if (!response.ok) throw await getFirebaseError(response);
+                const events = await response.json() || {};
+                Object.entries(events).forEach(([eventId, soundEvent]) => {
+                    if (!soundEvent?.assetKey || handledSoundEventIds.has(eventId)) return;
+                    if (typeof soundEvent.createdAt === 'number' && Date.now() - soundEvent.createdAt > 120000) {
+                        handledSoundEventIds.add(eventId);
+                        firebaseFetch(`${FIREBASE_SOUND_EVENTS_URL}/${encodeURIComponent(eventId)}.json`, { method: 'DELETE' })
+                            .catch(error => console.error('Не удалось удалить устаревший звуковой запрос:', error));
+                        return;
+                    }
+                    handledSoundEventIds.add(eventId);
+                    playOverlaySoundEvent(eventId, soundEvent).catch(error => {
+                        handledSoundEventIds.delete(eventId);
+                        console.error('Не удалось воспроизвести звук в OBS:', error);
+                    });
+                });
+            } catch (error) {
+                console.error('Ошибка получения звуковых запросов OBS:', error);
+            } finally {
+                soundEventsFetchPending = false;
             }
         }
 
