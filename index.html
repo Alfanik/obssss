@@ -697,7 +697,7 @@
             customWidgetsOwnerUid = ownerUid;
             try {
                 const response = await firebaseFetch(moderatorWidgetsCatalogUrl(ownerUid), { cache: 'no-store' });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (!response.ok) throw await getFirebaseError(response);
                 const saved = await response.json();
                 let widgets;
                 if (Array.isArray(saved)) {
@@ -971,7 +971,7 @@
             }, 1000);
             setInterval(() => {
                 if (!overlayFastUpdatesStream?.connected) fetchFastUpdatesFromCloud();
-            }, 250);
+            }, 1000);
             setInterval(() => {
                 if (!overlayVoiceStream?.connected) pollVoiceOffers();
             }, 1000);
@@ -1216,6 +1216,50 @@
             return cleanItem;
         }
 
+        const MAX_FIREBASE_MEDIA_BYTES = 4 * 1024 * 1024;
+        const COMPRESS_IMAGE_BYTES = 1.5 * 1024 * 1024;
+
+        function fileToDataUrl(file) {
+            const readAsDataUrl = blob => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error || new Error('Не удалось прочитать файл'));
+                reader.readAsDataURL(blob);
+            });
+
+            if (!file.type.startsWith('image/') || file.type === 'image/gif' || file.size <= COMPRESS_IMAGE_BYTES) {
+                if (file.size > MAX_FIREBASE_MEDIA_BYTES) {
+                    return Promise.reject(new Error('Файл больше 4 МБ. Сожмите его перед загрузкой; большие файлы перегружают Firebase и OBS.'));
+                }
+                return readAsDataUrl(file);
+            }
+
+            return new Promise((resolve, reject) => {
+                const objectUrl = URL.createObjectURL(file);
+                const image = new Image();
+                image.onload = async () => {
+                    URL.revokeObjectURL(objectUrl);
+                    try {
+                        const scale = Math.min(1, 1920 / image.naturalWidth, 1080 / image.naturalHeight);
+                        const canvas = document.createElement('canvas');
+                        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+                        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+                        canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+                        const compressed = await new Promise((done, fail) => canvas.toBlob(blob => blob ? done(blob) : fail(new Error('Не удалось сжать изображение')), 'image/webp', 0.84));
+                        if (compressed.size > MAX_FIREBASE_MEDIA_BYTES) throw new Error('После сжатия изображение всё ещё больше 4 МБ. Уменьшите его размер.');
+                        resolve(await readAsDataUrl(compressed));
+                    } catch (error) {
+                        reject(error);
+                    }
+                };
+                image.onerror = () => {
+                    URL.revokeObjectURL(objectUrl);
+                    reject(new Error('Не удалось открыть изображение для сжатия'));
+                };
+                image.src = objectUrl;
+            });
+        }
+
         function uploadMediaAsset(item) {
             if (typeof item.url !== 'string' || !item.url.startsWith('data:')) return Promise.resolve();
             const assetKey = item.assetKey || item.id;
@@ -1289,23 +1333,80 @@
                 });
         }
 
+        let lastSyncedOverlaySnapshot = null;
+        let overlayMutationVersion = 0;
+
+        function normalizeCloudOverlayList(data) {
+            const items = Array.isArray(data) ? data : (data && typeof data === 'object' ? Object.values(data) : []);
+            return items.filter(item => item && typeof item.id === 'string' && typeof item.type === 'string')
+                .map(item => JSON.parse(JSON.stringify(serializeOverlayForCloud(item))));
+        }
+
+        function overlayStateById(items) {
+            return new Map(items.map(item => [item.id, JSON.stringify(item)]));
+        }
+
+        async function saveMergedOverlayState(localSnapshot, localState) {
+            for (let attempt = 0; attempt < 4; attempt++) {
+                const readResponse = await firebaseFetch(FIREBASE_DB_URL, {
+                    cache: 'no-store',
+                    headers: { 'X-Firebase-ETag': 'true' }
+                });
+                if (!readResponse.ok) throw await getFirebaseError(readResponse);
+                const etag = readResponse.headers.get('ETag');
+                if (!etag) throw new Error('Firebase не вернул ETag для безопасного сохранения общего оверлея');
+
+                const remoteState = normalizeCloudOverlayList(await readResponse.json());
+                const base = lastSyncedOverlaySnapshot || remoteState;
+                const baseById = overlayStateById(base);
+                const localById = overlayStateById(localState);
+                const mergedById = new Map(remoteState.map(item => [item.id, item]));
+
+                for (const [id] of baseById) {
+                    if (!localById.has(id)) mergedById.delete(id);
+                    else if (localById.get(id) !== baseById.get(id)) {
+                        mergedById.set(id, localState.find(item => item.id === id));
+                    }
+                }
+                for (const item of localState) {
+                    if (!baseById.has(item.id)) mergedById.set(item.id, item);
+                }
+
+                const mergedState = [...mergedById.values()];
+                const writeResponse = await firebaseFetch(FIREBASE_DB_URL, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', 'If-Match': etag },
+                    body: JSON.stringify(mergedState)
+                });
+                if (writeResponse.status === 412) continue;
+                if (!writeResponse.ok) throw await getFirebaseError(writeResponse);
+                lastSyncedOverlaySnapshot = mergedState;
+                return mergedState;
+            }
+            throw new Error('Общий оверлей часто меняется. Повторите сохранение через секунду.');
+        }
+
         function saveAndBroadcast() {
+            const mutationVersion = ++overlayMutationVersion;
             const snapshot = activeOverlays.map(item => {
                 if (typeof item.url === 'string' && item.url.startsWith('data:')) item.assetKey = item.assetKey || item.id;
                 return { ...item };
             });
-            const cleanOverlays = snapshot.map(serializeOverlayForCloud);
-            lastCloudString = JSON.stringify(cleanOverlays.map(getCloudStateFingerprint));
+            const localState = snapshot.map(serializeOverlayForCloud);
+            lastCloudString = JSON.stringify(localState.map(getCloudStateFingerprint));
             cloudWritesPending++;
             cloudSaveQueue = cloudSaveQueue.catch(() => {}).then(() =>
                 Promise.all(snapshot.map(uploadMediaAsset))
-                    .then(() => firebaseFetch(FIREBASE_DB_URL, {
-                        method: 'PUT',
-                        body: JSON.stringify(cleanOverlays),
-                        headers: { 'Content-Type': 'application/json' }
-                    }))
-                    .then(async res => {
-                        if (!res.ok) throw await getFirebaseError(res);
+                    .then(() => saveMergedOverlayState(snapshot, localState))
+                    .then(mergedState => {
+                        lastSyncedOverlaySnapshot = mergedState;
+                        if (mutationVersion === overlayMutationVersion &&
+                            JSON.stringify(mergedState.map(getCloudStateFingerprint)) !== lastCloudString) {
+                            lastCloudString = JSON.stringify(mergedState.map(getCloudStateFingerprint));
+                            const urlsById = new Map(activeOverlays.map(item => [item.id, item.url]));
+                            activeOverlays = mergedState.map(item => ({ ...item, ...(urlsById.has(item.id) ? { url: urlsById.get(item.id) } : {}) }));
+                            renderOverlaysSmart();
+                        }
                     })
             )
                 .catch(err => {
@@ -1320,23 +1421,18 @@
             const url = `${FIREBASE_FAST_UPDATES_URL}/${encodeURIComponent(item.id)}.json`;
             firebaseFetch(url, {
                 method: 'PATCH',
-                body: JSON.stringify(fields),
+                body: JSON.stringify({ ...fields, updatedAt: Date.now() }),
                 headers: { 'Content-Type': 'application/json' }
+            }).then(async response => {
+                if (!response.ok) throw await getFirebaseError(response);
             }).catch(err => console.error("Ошибка быстрой синхронизации:", err));
         }
 
         function persistOverlayPatch(item, fields) {
-            const index = activeOverlays.findIndex(current => current.id === item.id);
-            if (index < 0) return;
-            const url = FIREBASE_DB_URL.replace(/\.json$/, `/${index}.json`);
-            cloudWritesPending++;
-            firebaseFetch(url, {
-                method: 'PATCH',
-                body: JSON.stringify(fields),
-                headers: { 'Content-Type': 'application/json' }
-            })
-                .catch(err => console.error("Ошибка сохранения элемента:", err))
-                .finally(() => { cloudWritesPending--; });
+            const current = activeOverlays.find(candidate => candidate.id === item.id);
+            if (!current) return;
+            Object.assign(current, fields);
+            return saveAndBroadcast();
         }
 
         function fetchFastUpdatesFromCloud() {
@@ -1351,6 +1447,7 @@
                     Object.entries(updates).forEach(([id, update]) => {
                         const item = activeOverlays.find(current => current.id === id);
                         if (!item || !update || typeof update !== 'object') return;
+                        if (typeof update.updatedAt === 'number' && Date.now() - update.updatedAt > 15000) return;
                         if (update.x !== undefined && item.x !== update.x) {
                             item.x = update.x;
                             changed = true;
@@ -1396,6 +1493,7 @@
         function fetchStateFromCloud() {
             if (isDragging || cloudWritesPending > 0 || cloudStateFetchPending) return;
             cloudStateFetchPending = true;
+            const fetchMutationVersion = overlayMutationVersion;
 
             firebaseFetch(FIREBASE_DB_URL, { cache: 'no-store' })
                 .then(res => {
@@ -1415,6 +1513,8 @@
                     if (!newData.every(item => item && typeof item === 'object' && !Array.isArray(item) && typeof item.id === 'string' && typeof item.type === 'string')) {
                         throw new Error('В Firebase найдено состояние с неизвестным форматом; локальный список сохранён');
                     }
+                    if (fetchMutationVersion !== overlayMutationVersion || cloudWritesPending > 0 || isDragging) return;
+                    lastSyncedOverlaySnapshot = normalizeCloudOverlayList(newData);
                     const previousItems = new Map(activeOverlays.map(item => [item.id, item]));
                     newData = newData.map(item => {
                         const previous = item && previousItems.get(item.id);
@@ -1593,15 +1693,15 @@
             showToast('Текстовый блок создан');
         }
 
-        function handleImageFileUpload(e) {
+        async function handleImageFileUpload(e) {
             const file = e.target.files[0];
             if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function(evt) {
+            try {
+                const url = await fileToDataUrl(file);
                 activeOverlays.push({
                     id: 'img_' + Date.now(),
                     type: 'image',
-                    url: evt.target.result,
+                    url,
                     anim: document.getElementById('global-anim-select').value,
                     scale: 1,
                     x: 50,
@@ -1611,8 +1711,12 @@
                 saveAndBroadcast();
                 renderOverlays();
                 showToast('Изображение загружено');
-            };
-            reader.readAsDataURL(file);
+            } catch (error) {
+                console.error('Не удалось подготовить изображение:', error);
+                showToast(error.message, 'warning');
+            } finally {
+                e.target.value = '';
+            }
         }
 
         function sendImageUrlOverlay() {
@@ -1634,16 +1738,22 @@
             showToast('Изображение отправлено');
         }
 
-        function handleVideoFileUpload(e) {
+        async function handleVideoFileUpload(e) {
             const file = e.target.files[0];
             if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function(evt) {
+            if (file.size > MAX_FIREBASE_MEDIA_BYTES) {
+                showToast('Видео больше 4 МБ. Сейчас Firebase хранит медиа вместе с данными, поэтому большие видео вызывают задержки и не загружаются.', 'warning');
+                e.target.value = '';
+                return;
+            }
+            try {
+                const url = await fileToDataUrl(file);
+                const volumeValue = Number(document.getElementById('video-volume').value);
                 activeOverlays.push({
                     id: 'vid_' + Date.now(),
                     type: 'video',
-                    url: evt.target.result,
-                    volume: (parseInt(document.getElementById('video-volume').value) || 80) / 100,
+                    url,
+                    volume: Number.isFinite(volumeValue) ? volumeValue / 100 : 0.8,
                     anim: document.getElementById('global-anim-select').value,
                     scale: 1,
                     x: 50,
@@ -1653,8 +1763,12 @@
                 saveAndBroadcast();
                 renderOverlays();
                 showToast('Видео файл загружен');
-            };
-            reader.readAsDataURL(file);
+            } catch (error) {
+                console.error('Не удалось подготовить видео:', error);
+                showToast(error.message, 'warning');
+            } finally {
+                e.target.value = '';
+            }
         }
 
         function parseMediaUrl(rawUrl) {
@@ -1759,17 +1873,25 @@
             document.getElementById('widget-builder-modal').classList.add('hidden');
         }
 
-        function handleBuilderFile(e) {
+        async function handleBuilderFile(e) {
             const file = e.target.files[0];
             if (!file) return;
             builderMediaType = file.type.startsWith('video') ? 'video' : 'image';
-            const reader = new FileReader();
-            reader.onload = function(evt) {
-                builderMediaSrc = evt.target.result;
+            if (builderMediaType === 'video' && file.size > MAX_FIREBASE_MEDIA_BYTES) {
+                showToast('Видео больше 4 МБ. Уменьшите файл: Firebase Realtime Database не подходит для хранения больших видео.', 'warning');
+                e.target.value = '';
+                return;
+            }
+            try {
+                builderMediaSrc = await fileToDataUrl(file);
                 document.getElementById('bw-url').value = '';
                 updateBuilderPreview();
-            };
-            reader.readAsDataURL(file);
+            } catch (error) {
+                console.error('Не удалось подготовить файл виджета:', error);
+                showToast(error.message, 'warning');
+            } finally {
+                e.target.value = '';
+            }
         }
 
         function updateBuilderPreview() {
@@ -2084,7 +2206,7 @@
 
             try {
                 const response = await firebaseFetch(moderatorSoundsUrl(ownerUid), { cache: 'no-store' });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (!response.ok) throw await getFirebaseError(response);
                 const savedSounds = await response.json();
                 const sounds = Array.isArray(savedSounds) ? savedSounds : [];
                 const loadedSounds = await Promise.all(sounds.map(async sound => {
@@ -2148,15 +2270,15 @@
             if (!ownerUid) return showToast('Сначала войдите в аккаунт модератора', 'warning');
             if (!file) return showToast('Выберите аудиофайл', 'warning');
 
+            if (file.size > MAX_FIREBASE_MEDIA_BYTES) {
+                return showToast('Аудиофайл больше 4 МБ. Уменьшите файл: Firebase Realtime Database не подходит для хранения больших медиа.', 'warning');
+            }
+
             const button = document.querySelector('#sound-builder-modal button[onclick="saveCustomSound()"]');
+            if (button?.disabled) return;
             if (button) button.disabled = true;
             try {
-                const url = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result);
-                    reader.onerror = () => reject(reader.error || new Error('Не удалось прочитать аудиофайл'));
-                    reader.readAsDataURL(file);
-                });
+                const url = await fileToDataUrl(file);
                 const id = 'sound_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
                 const sound = {
                     id,
@@ -2173,7 +2295,7 @@
                     body: JSON.stringify(metadata),
                     headers: { 'Content-Type': 'application/json' }
                 });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (!response.ok) throw await getFirebaseError(response);
                 if (moderatorAuth?.uid !== ownerUid) return;
                 customSoundsList = nextSounds;
                 customSoundsOwnerUid = ownerUid;
@@ -2185,7 +2307,7 @@
                 showToast('Звук сохранен в личный список');
             } catch (error) {
                 console.error('Не удалось сохранить звук:', error);
-                showToast('Не удалось сохранить звук. Проверьте подключение Firebase.', 'warning');
+                showToast(`Не удалось сохранить звук: ${error.message}`, 'warning');
             } finally {
                 if (button) button.disabled = false;
             }
@@ -2221,7 +2343,7 @@
                     body: JSON.stringify(metadata),
                     headers: { 'Content-Type': 'application/json' }
                 });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (!response.ok) throw await getFirebaseError(response);
                 if (moderatorAuth?.uid !== ownerUid) return;
                 customSoundsList = nextSounds;
                 renderCustomSoundsMenu();
@@ -2482,7 +2604,7 @@
                     if (moderatorMicSessionId !== sessionId) return;
                     if (connection.connectionState === 'connected') updateMicButton('on');
                     if (connection.connectionState === 'failed') {
-                        showToast('Не удалось соединиться с OBS; возможно, нужен TURN-сервер', 'warning');
+                        showToast('Микрофон не соединился с OBS. Проверьте, что OBS-оверлей открыт; если он открыт, сети могут требовать TURN-сервер.', 'warning');
                         stopModeratorMic();
                     }
                 };
@@ -2521,7 +2643,6 @@
                 const session = await response.json();
                 if (session && session.answer) {
                     await connection.setRemoteDescription(session.answer);
-                    if (moderatorMicSessionId === sessionId) updateMicButton('on');
                     return;
                 }
                 await new Promise(resolve => setTimeout(resolve, 800));
