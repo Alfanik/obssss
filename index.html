@@ -582,7 +582,15 @@
         const FIREBASE_AUTH_URL = 'https://identitytoolkit.googleapis.com/v1';
         const FIREBASE_TOKEN_URL = 'https://securetoken.googleapis.com/v1';
         const MODERATOR_EMAILS = { alfanik: 'fnafik.red@mail.ru', cherry: 'girl_love_2018@mail.ru' };
-        const VOICE_RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        // Define window.OVERLAY_VOICE_ICE_SERVERS before this script on BOTH the moderator page and OBS page.
+        // TURN entries must use credentials issued by your TURN provider; never commit long-lived secrets here.
+        const configuredVoiceIceServers = Array.isArray(window.OVERLAY_VOICE_ICE_SERVERS)
+            ? window.OVERLAY_VOICE_ICE_SERVERS.filter(server => server && server.urls && (!server.username || server.credential))
+            : [];
+        const VOICE_RTC_CONFIG = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, ...configuredVoiceIceServers],
+            iceTransportPolicy: window.OVERLAY_VOICE_ICE_TRANSPORT_POLICY === 'relay' ? 'relay' : 'all'
+        };
         let moderatorAuth = null;
         let overlayAuth = null;
         let authRefreshPromise = null;
@@ -783,6 +791,7 @@
         let voiceOfferPollPending = false;
         const obsVoiceConnections = new Map();
         const handledVoiceSessions = new Set();
+        const voiceSessionAttempts = new Map();
 
         let builderWidgetWidth = 260;
         let builderWidgetHeight = 160;
@@ -2531,16 +2540,17 @@
 
         function waitForIceGatheringComplete(connection) {
             if (connection.iceGatheringState === 'complete') return Promise.resolve();
-            return new Promise(resolve => {
-                const finish = () => {
+            return new Promise((resolve, reject) => {
+                const finish = error => {
                     clearTimeout(timeoutId);
                     connection.removeEventListener('icegatheringstatechange', checkState);
-                    resolve();
+                    if (error) reject(error);
+                    else resolve();
                 };
                 const checkState = () => {
                     if (connection.iceGatheringState === 'complete') finish();
                 };
-                const timeoutId = setTimeout(finish, 15000);
+                const timeoutId = setTimeout(() => finish(new Error('ICE не собрал сетевые адреса за 15 секунд. Проверьте сеть и TURN-настройки.')), 15000);
                 connection.addEventListener('icegatheringstatechange', checkState);
                 checkState();
             });
@@ -2630,7 +2640,7 @@
                     ? 'Разрешите доступ к микрофону в браузере'
                     : (error.name === 'MicTimeoutError'
                         ? 'Браузер не ответил на запрос микрофона. Разрешите его в настройках сайта и попробуйте снова'
-                        : 'Не удалось включить микрофон; проверьте подключение OBS и правила Firebase'), 'warning');
+                        : (error.message || 'Не удалось включить микрофон; проверьте подключение OBS и правила Firebase')), 'warning');
                 if (moderatorMicSessionId === sessionId) stopModeratorMic();
             }
         }
@@ -2641,8 +2651,15 @@
                 const response = await firebaseFetch(voiceSessionUrl(sessionId), { cache: 'no-store' });
                 if (!response.ok) throw new Error(`Firebase HTTP ${response.status}`);
                 const session = await response.json();
+                if (session && session.playbackError) throw new Error(session.playbackError);
                 if (session && session.answer) {
                     await connection.setRemoteDescription(session.answer);
+                    const connectDeadline = Date.now() + 25000;
+                    while (moderatorMicSessionId === sessionId && connection.connectionState !== 'connected') {
+                        if (connection.connectionState === 'failed') throw new Error('WebRTC ICE-соединение не установилось. Для этой сети может потребоваться TURN.');
+                        if (Date.now() >= connectDeadline) throw new Error('OBS ответил, но WebRTC-соединение не установилось за 25 секунд. Проверьте TURN и сетевые ограничения.');
+                        await new Promise(resolve => setTimeout(resolve, 250));
+                    }
                     return;
                 }
                 await new Promise(resolve => setTimeout(resolve, 800));
@@ -2679,14 +2696,27 @@
                 obsVoiceConnections.forEach((entry, sessionId) => {
                     if (!liveSessionIds.has(sessionId)) closeObsVoiceConnection(sessionId);
                 });
+                for (const sessionId of voiceSessionAttempts.keys()) {
+                    if (!liveSessionIds.has(sessionId)) voiceSessionAttempts.delete(sessionId);
+                }
                 Object.entries(sessions).forEach(([sessionId, session]) => {
                     if (!session || !session.offer || handledVoiceSessions.has(sessionId)) return;
                     if (session.status === 'ended' || Date.now() - (session.createdAt || 0) > 120000) return;
                     if (obsVoiceConnections.size >= 8) return;
                     handledVoiceSessions.add(sessionId);
-                    answerVoiceOffer(sessionId, session).catch(error => {
+                    answerVoiceOffer(sessionId, session).then(() => {
+                        voiceSessionAttempts.delete(sessionId);
+                    }).catch(error => {
                         console.error('Ошибка голосового соединения OBS:', error);
                         closeObsVoiceConnection(sessionId);
+                        const attempts = (voiceSessionAttempts.get(sessionId) || 0) + 1;
+                        voiceSessionAttempts.set(sessionId, attempts);
+                        if (attempts < 3) {
+                            handledVoiceSessions.delete(sessionId);
+                            setTimeout(() => pollVoiceOffers(), 1200 * attempts);
+                        } else {
+                            console.error('Превышено число повторов подключения микрофона OBS:', sessionId);
+                        }
                     });
                 });
             } catch (error) {
@@ -2711,7 +2741,14 @@
                 audio.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;';
                 document.body.appendChild(audio);
                 current.audio = audio;
-                audio.play().catch(error => console.error('OBS заблокировал воспроизведение аудио:', error));
+                audio.play().catch(error => {
+                    console.error('OBS заблокировал воспроизведение аудио:', error);
+                    firebaseFetch(voiceSessionUrl(sessionId), {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ playbackError: 'OBS Browser Source заблокировал воспроизведение звука. Проверьте настройки аудио источника OBS.' })
+                    }).catch(reportError => console.error('Не удалось сообщить об ошибке аудио OBS:', reportError));
+                });
             };
             connection.onconnectionstatechange = () => {
                 if (connection.connectionState === 'failed' || connection.connectionState === 'closed') {
@@ -2899,17 +2936,37 @@
             if (item.type === 'audio' && !isInteractive && item.url && !playedOverlayAudioIds.has(item.id)) {
                 playedOverlayAudioIds.add(item.id);
                 const audio = document.createElement('audio');
-                audio.src = item.url;
                 audio.volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.8)));
-                audio.autoplay = true;
                 audio.loop = false;
                 audio.playsInline = true;
                 audio.preload = 'auto';
                 audio.style.display = 'none';
+                let playAttempts = 0;
+                let playbackStarted = false;
+                let playRequestPending = false;
+                const startPlayback = () => {
+                    if (playbackStarted || playRequestPending || !audio.isConnected) return;
+                    playAttempts++;
+                    playRequestPending = true;
+                    audio.play().then(() => {
+                        playbackStarted = true;
+                        playRequestPending = false;
+                    }).catch(error => {
+                        playRequestPending = false;
+                        if (playAttempts < 4 && audio.isConnected) {
+                            setTimeout(startPlayback, playAttempts * 400);
+                        } else {
+                            console.error('OBS не смог воспроизвести звук после повторных попыток:', error);
+                        }
+                    });
+                };
                 audio.addEventListener('ended', () => removeOverlayItem(item.id), { once: true });
+                audio.addEventListener('canplay', startPlayback, { once: true });
+                audio.addEventListener('error', () => console.error('OBS не смог загрузить аудиофайл:', audio.error));
+                audio.src = item.url;
                 node.appendChild(audio);
                 audio.load();
-                audio.play().catch(error => console.error('OBS не смог воспроизвести звук:', error));
+                if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) startPlayback();
             }
             if (isInteractive) {
                 [
