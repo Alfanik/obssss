@@ -139,7 +139,7 @@
 
                     <div id="preview-container" class="relative w-full aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 shadow-inner group select-none">
                         <div id="preview-bg-holder" class="w-full h-full pointer-events-none">
-                            <iframe id="twitch-frame" src="https://player.twitch.tv/?channel=dell11q&parent=localhost&muted=true" class="w-full h-full border-0 pointer-events-auto"></iframe>
+                            <iframe id="twitch-frame" class="w-full h-full border-0 pointer-events-auto" title="Предпросмотр Twitch"></iframe>
                         </div>
 
                         <div id="operator-overlay-canvas" class="absolute inset-0 z-20 overflow-hidden pointer-events-auto"></div>
@@ -680,7 +680,7 @@
                 body: JSON.stringify(metadata),
                 headers: { 'Content-Type': 'application/json' }
             });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (!response.ok) throw await getFirebaseError(response);
         }
 
         async function loadModeratorWidgets() {
@@ -758,6 +758,9 @@
         let fastUpdatesFetchPending = false;
         let stateInitialized = false;
         let mediaMigrationStarted = false;
+        let overlayStateStream = null;
+        let overlayFastUpdatesStream = null;
+        let overlayVoiceStream = null;
         let cloudSaveQueue = Promise.resolve();
         const uploadedMediaAssetKeys = new Set();
         const pendingMediaAssetUploads = new Map();
@@ -906,6 +909,72 @@
                 requestUrl.searchParams.set('auth', idToken);
             }
             return fetch(requestUrl.toString(), options);
+        }
+
+        async function getFirebaseError(response) {
+            let detail = '';
+            try {
+                const payload = await response.clone().json();
+                detail = payload?.error?.message || (typeof payload?.error === 'string' ? payload.error : '');
+            } catch (error) {}
+            return new Error(detail ? `Firebase HTTP ${response.status}: ${detail}` : `Firebase HTTP ${response.status}`);
+        }
+
+        function openOverlayRealtimeStream(path, onUpdate) {
+            let source = null;
+            let retryTimer = null;
+            let closed = false;
+            const connect = () => {
+                if (closed || !overlayAuth?.idToken) return;
+                const url = new URL(`${path}.json`, window.location.href);
+                url.searchParams.set('auth', overlayAuth.idToken);
+                source = new EventSource(url.toString());
+                ['put', 'patch'].forEach(type => source.addEventListener(type, onUpdate));
+                source.onerror = async () => {
+                    source?.close();
+                    if (closed || retryTimer) return;
+                    retryTimer = setTimeout(async () => {
+                        retryTimer = null;
+                        if (closed) return;
+                        if (overlayAuth?.expiresAt < Date.now() + 60000) await refreshOverlayAuth();
+                        connect();
+                    }, 2000);
+                };
+            };
+            connect();
+            return {
+                get connected() { return source?.readyState === EventSource.OPEN; },
+                close() {
+                    closed = true;
+                    clearTimeout(retryTimer);
+                    source?.close();
+                }
+            };
+        }
+
+        function startOverlayRealtimeUpdates() {
+            overlayStateStream = openOverlayRealtimeStream(
+                FIREBASE_DB_URL.replace(/\.json$/, ''),
+                () => fetchStateFromCloud()
+            );
+            overlayFastUpdatesStream = openOverlayRealtimeStream(
+                FIREBASE_FAST_UPDATES_URL,
+                () => fetchFastUpdatesFromCloud()
+            );
+            overlayVoiceStream = openOverlayRealtimeStream(
+                `${FIREBASE_VOICE_URL}/sessions`,
+                () => pollVoiceOffers()
+            );
+
+            setInterval(() => {
+                if (!overlayStateStream?.connected) fetchStateFromCloud();
+            }, 1000);
+            setInterval(() => {
+                if (!overlayFastUpdatesStream?.connected) fetchFastUpdatesFromCloud();
+            }, 250);
+            setInterval(() => {
+                if (!overlayVoiceStream?.connected) pollVoiceOffers();
+            }, 1000);
         }
 
         function moderatorPresenceEntryUrl() {
@@ -1059,7 +1128,7 @@
             });
         }
 
-        window.onload = async function() {
+        document.addEventListener('DOMContentLoaded', async () => {
             const urlParams = new URLSearchParams(window.location.search);
             const modeParam = urlParams.get('mode');
 
@@ -1082,13 +1151,13 @@
 
             if (modeParam === 'overlay') {
                 switchView('overlay');
-                setInterval(fetchStateFromCloud, 1000);
-                setInterval(fetchFastUpdatesFromCloud, 100);
-                setInterval(pollVoiceOffers, 1000);
+                startOverlayRealtimeUpdates();
                 fetchStateFromCloud();
+                fetchFastUpdatesFromCloud();
                 pollVoiceOffers();
             } else {
                 switchView('operator');
+                onStreamProviderChange();
                 startModeratorPresence();
                 setInterval(() => {
                     if (!isDragging) fetchStateFromCloud();
@@ -1104,7 +1173,7 @@
             if (previewContainer) {
                 previewContainer.addEventListener('wheel', handleCanvasWheel, { passive: false });
             }
-        };
+        });
 
         function getCloudStateFingerprint(item) {
             const { url, html, ...state } = item;
@@ -1159,8 +1228,8 @@
                 body: JSON.stringify(item.url),
                 headers: { 'Content-Type': 'application/json' }
             })
-                .then(res => {
-                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                .then(async res => {
+                    if (!res.ok) throw await getFirebaseError(res);
                     uploadedMediaAssetKeys.add(assetKey);
                 })
                 .finally(() => pendingMediaAssetUploads.delete(assetKey));
@@ -1235,11 +1304,14 @@
                         body: JSON.stringify(cleanOverlays),
                         headers: { 'Content-Type': 'application/json' }
                     }))
-                    .then(res => {
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    .then(async res => {
+                        if (!res.ok) throw await getFirebaseError(res);
                     })
             )
-                .catch(err => console.error("Ошибка сохранения:", err))
+                .catch(err => {
+                    console.error("Ошибка сохранения:", err);
+                    showToast(`Не удалось обновить оверлей: ${err.message}`, 'warning');
+                })
                 .finally(() => { cloudWritesPending--; });
             return cloudSaveQueue;
         }
@@ -1831,6 +1903,8 @@
 
             const ownerUid = moderatorAuth?.uid;
             if (!ownerUid) return showToast('Сначала войдите в аккаунт модератора', 'warning');
+            const saveButton = document.querySelector('#widget-builder-modal button[onclick="saveCustomWidget()"]');
+            if (saveButton?.disabled) return;
             const newCustomWidget = {
                 id: 'cw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
                 name, html, anim, scale: 1,
@@ -1840,18 +1914,36 @@
                 mediaSrc
             };
             const nextWidgets = [...customWidgetsList, newCustomWidget];
+            if (saveButton) {
+                saveButton.disabled = true;
+                saveButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Сохранение…';
+            }
             try {
                 await persistModeratorWidgets(nextWidgets, ownerUid);
             } catch (error) {
                 console.error('Не удалось сохранить виджет:', error);
-                showToast('Не удалось сохранить виджет в Firebase. Проверьте подключение и правила obs_assets.', 'warning');
+                showToast(`Не удалось сохранить виджет: ${error.message}`, 'warning');
+                if (saveButton) {
+                    saveButton.disabled = false;
+                    saveButton.innerHTML = '<i class="fa-solid fa-check"></i> Сохранить и добавить виджет';
+                }
                 return;
             }
-            if (moderatorAuth?.uid !== ownerUid) return;
+            if (moderatorAuth?.uid !== ownerUid) {
+                if (saveButton) {
+                    saveButton.disabled = false;
+                    saveButton.innerHTML = '<i class="fa-solid fa-check"></i> Сохранить и добавить виджет';
+                }
+                return;
+            }
             customWidgetsList = nextWidgets;
             customWidgetsOwnerUid = ownerUid;
             customWidgetsLoaded = true;
             renderCustomWidgetsMenu();
+            if (saveButton) {
+                saveButton.disabled = false;
+                saveButton.innerHTML = '<i class="fa-solid fa-check"></i> Сохранить и добавить виджет';
+            }
             closeWidgetBuilderModal();
             showToast('Виджет сохранен в аккаунт модератора!');
         }
