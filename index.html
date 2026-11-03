@@ -74,6 +74,7 @@
         }
         .resize-handle { opacity: 0; transition: opacity 120ms ease; }
         .draggable-item:hover .resize-handle { opacity: 1; }
+        #operator-overlay-canvas iframe { pointer-events: none; }
     </style>
 </head>
 <body class="bg-obs-dark text-slate-100 font-sans min-h-screen antialiased flex flex-col selection:bg-indigo-600 selection:text-white">
@@ -95,6 +96,10 @@
                 <span>Облачное соединение для модераторов</span>
             </div>
 
+            <button id="moderator-mic-button" onclick="toggleModeratorMic()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer">
+                <i class="fa-solid fa-microphone"></i>
+                <span>Включить микрофон</span>
+            </button>
             <button onclick="copyOverlayLink()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition shadow-lg shadow-indigo-600/20 cursor-pointer">
                 <i class="fa-solid fa-link"></i>
                 <span>Ссылка OBS</span>
@@ -107,6 +112,13 @@
         <div id="view-operator" class="flex-1 p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-y-auto max-w-[1920px] mx-auto w-full">
             
             <div class="lg:col-span-7 flex flex-col gap-6">
+                <section class="bg-obs-card border border-obs-border rounded-2xl p-4 shadow-xl">
+                    <div class="flex items-center justify-between mb-2">
+                        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300"><i class="fa-solid fa-users text-indigo-400 mr-2"></i>Модераторы онлайн</h2>
+                        <span class="text-[10px] text-slate-500">обновление каждые 5 секунд</span>
+                    </div>
+                    <div id="moderator-presence-list" class="flex flex-wrap gap-2 text-xs text-slate-400">Загрузка списка…</div>
+                </section>
                 
                 <div class="bg-obs-card border border-obs-border rounded-2xl p-4 shadow-xl flex flex-col">
                     <div class="flex items-center justify-between gap-2 mb-3">
@@ -505,6 +517,18 @@
         const FIREBASE_DB_URL = "https://alfanik-ac5d7-default-rtdb.firebaseio.com/obs_state.json";
         const FIREBASE_FAST_UPDATES_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_fast_updates');
         const FIREBASE_ASSETS_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_assets');
+        const FIREBASE_VOICE_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_voice');
+        const FIREBASE_PRESENCE_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_moderators/online');
+        const FIREBASE_API_KEY = 'AIzaSyCfffBZIVTv9quqZ2JFj44kDF05GdVOhbk';
+        const FIREBASE_AUTH_URL = 'https://identitytoolkit.googleapis.com/v1';
+        const FIREBASE_TOKEN_URL = 'https://securetoken.googleapis.com/v1';
+        const MODERATOR_EMAILS = { alfanik: 'alfanik@alfanik-ac5d7.firebaseapp.com', cherry: 'cherry@alfanik-ac5d7.firebaseapp.com' };
+        const VOICE_RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        let moderatorAuth = null;
+        let authRefreshPromise = null;
+        let moderatorPresenceId = null;
+        let presenceListFetchPending = false;
+        let presenceHeartbeatTimer = null;
 
         let activeOverlays = [];
         let customWidgetsList = JSON.parse(localStorage.getItem('obs_custom_widgets') || '[]');
@@ -539,6 +563,12 @@
         let resizeOverlayStartHeight = 1;
         let builderMediaSrc = "";
         let builderMediaType = "image";
+        let moderatorMicStream = null;
+        let moderatorMicConnection = null;
+        let moderatorMicSessionId = null;
+        let voiceOfferPollPending = false;
+        const obsVoiceConnections = new Map();
+        const handledVoiceSessions = new Set();
 
         let builderWidgetWidth = 260;
         let builderWidgetHeight = 160;
@@ -549,29 +579,240 @@
         let startW = 260;
         let startH = 160;
 
-        window.onload = function() {
+        function saveModeratorAuth(auth) {
+            moderatorAuth = {
+                idToken: auth.idToken,
+                refreshToken: auth.refreshToken,
+                expiresAt: Date.now() + Number(auth.expiresIn || 3600) * 1000,
+                username: auth.username,
+                uid: auth.localId || auth.uid || moderatorAuth?.uid
+            };
+            localStorage.setItem('obs_moderator_auth', JSON.stringify(moderatorAuth));
+            updateAuthHeader();
+        }
+
+        function clearModeratorAuth() {
+            moderatorAuth = null;
+            localStorage.removeItem('obs_moderator_auth');
+        }
+
+        async function refreshModeratorAuth() {
+            if (!moderatorAuth || !moderatorAuth.refreshToken) return false;
+            if (authRefreshPromise) return authRefreshPromise;
+            authRefreshPromise = fetch(`${FIREBASE_TOKEN_URL}/token?key=${FIREBASE_API_KEY}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: moderatorAuth.refreshToken })
+            })
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error?.message || 'Не удалось продлить вход');
+                    saveModeratorAuth({
+                        idToken: data.id_token,
+                        refreshToken: data.refresh_token,
+                        expiresIn: data.expires_in,
+                        username: moderatorAuth.username
+                    });
+                    return true;
+                })
+                .catch(() => {
+                    clearModeratorAuth();
+                    return false;
+                })
+                .finally(() => { authRefreshPromise = null; });
+            return authRefreshPromise;
+        }
+
+        async function firebaseFetch(url, options = {}) {
+            const requestUrl = new URL(url, window.location.href);
+            if (requestUrl.hostname.endsWith('firebaseio.com')) {
+                if (moderatorAuth && moderatorAuth.expiresAt < Date.now() + 60000) {
+                    await refreshModeratorAuth();
+                }
+                if (!moderatorAuth?.idToken) {
+                    throw new Error('Сначала войдите в аккаунт модератора');
+                }
+                requestUrl.searchParams.set('auth', moderatorAuth.idToken);
+            }
+            return fetch(requestUrl.toString(), options);
+        }
+
+        function moderatorPresenceEntryUrl() {
+            return `${FIREBASE_PRESENCE_URL}/${encodeURIComponent(moderatorPresenceId)}.json`;
+        }
+
+        function startModeratorPresence() {
+            if (document.body.classList.contains('obs-overlay-mode') || !moderatorAuth?.uid || moderatorPresenceId) return;
+            moderatorPresenceId = `${moderatorAuth.uid}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            const heartbeat = () => firebaseFetch(moderatorPresenceEntryUrl(), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: moderatorAuth.username, updatedAt: Date.now() })
+            }).catch(error => console.error('Ошибка статуса модератора:', error));
+            heartbeat();
+            presenceHeartbeatTimer = setInterval(heartbeat, 12000);
+            refreshModeratorPresenceList();
+            setInterval(refreshModeratorPresenceList, 5000);
+            window.addEventListener('pagehide', stopModeratorPresence, { once: true });
+        }
+
+        async function refreshModeratorPresenceList() {
+            if (presenceListFetchPending || !moderatorAuth?.idToken) return;
+            presenceListFetchPending = true;
+            try {
+                const response = await firebaseFetch(`${FIREBASE_PRESENCE_URL}.json`, { cache: 'no-store' });
+                if (!response.ok) throw new Error(`Firebase HTTP ${response.status}`);
+                const entries = await response.json() || {};
+                const online = new Set(Object.values(entries)
+                    .filter(entry => entry && Date.now() - entry.updatedAt < 35000)
+                    .map(entry => String(entry.username || '').toLowerCase()));
+                const list = document.getElementById('moderator-presence-list');
+                if (list) {
+                    list.innerHTML = Object.keys(MODERATOR_EMAILS).map(username => {
+                        const isOnline = online.has(username);
+                        return `<span class="inline-flex items-center gap-1.5 rounded-full border ${isOnline ? 'border-emerald-500/40 bg-emerald-950/50 text-emerald-300' : 'border-slate-700 bg-slate-900 text-slate-500'} px-2.5 py-1"><span class="h-2 w-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-slate-600'}"></span>${escapeHtml(username)}</span>`;
+                    }).join('');
+                }
+            } catch (error) {
+                console.error('Ошибка списка модераторов:', error);
+            } finally {
+                presenceListFetchPending = false;
+            }
+        }
+
+        function stopModeratorPresence() {
+            if (presenceHeartbeatTimer) clearInterval(presenceHeartbeatTimer);
+            presenceHeartbeatTimer = null;
+            if (!moderatorPresenceId || !moderatorAuth?.idToken) return;
+            const url = new URL(moderatorPresenceEntryUrl());
+            url.searchParams.set('auth', moderatorAuth.idToken);
+            fetch(url.toString(), { method: 'DELETE', keepalive: true })
+                .catch(error => console.error('Ошибка отключения статуса модератора:', error));
+            moderatorPresenceId = null;
+        }
+
+        function updateAuthHeader() {
+            if (!moderatorAuth || document.body.classList.contains('obs-overlay-mode')) return;
+            let controls = document.getElementById('moderator-auth-controls');
+            if (!controls) {
+                controls = document.createElement('div');
+                controls.id = 'moderator-auth-controls';
+                controls.className = 'flex items-center gap-2 text-xs text-slate-300';
+                document.querySelector('#main-header > div:last-child')?.appendChild(controls);
+            }
+            controls.innerHTML = `<span>Модератор: ${escapeHtml(moderatorAuth.username)}</span><button type="button" class="text-slate-400 hover:text-white underline" onclick="signOutModerator()">Выйти</button>`;
+        }
+
+        function signOutModerator() {
+            stopModeratorMic();
+            stopModeratorPresence();
+            clearModeratorAuth();
+            window.location.reload();
+        }
+
+        async function ensureModeratorAuth() {
+            try {
+                moderatorAuth = JSON.parse(localStorage.getItem('obs_moderator_auth') || 'null');
+            } catch (error) {
+                clearModeratorAuth();
+            }
+            if (moderatorAuth?.idToken && moderatorAuth.expiresAt > Date.now() + 60000) {
+                updateAuthHeader();
+                return true;
+            }
+            if (moderatorAuth?.refreshToken && await refreshModeratorAuth()) return true;
+
+            return new Promise(resolve => {
+                const gate = document.createElement('div');
+                gate.id = 'moderator-login-gate';
+                gate.className = 'fixed inset-0 z-[100] flex items-center justify-center bg-obs-dark/95 p-4';
+                gate.innerHTML = `
+                    <form id="moderator-login-form" class="w-full max-w-sm rounded-2xl border border-obs-border bg-obs-card p-6 shadow-2xl">
+                        <div class="mb-5 text-center">
+                            <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600"><i class="fa-solid fa-user-shield text-xl"></i></div>
+                            <h2 class="text-lg font-bold text-white">Вход модератора</h2>
+                            <p class="mt-1 text-xs text-slate-400">Введите выданный вам логин и пароль</p>
+                        </div>
+                        <label class="mb-3 block text-xs font-semibold text-slate-300">Логин
+                            <input id="moderator-login-name" autocomplete="username" required class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-indigo-500">
+                        </label>
+                        <label class="mb-4 block text-xs font-semibold text-slate-300">Пароль
+                            <input id="moderator-login-password" type="password" autocomplete="current-password" required class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-indigo-500">
+                        </label>
+                        <p id="moderator-login-error" class="mb-3 min-h-4 text-xs text-red-400" role="alert"></p>
+                        <button id="moderator-login-submit" class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500">Войти</button>
+                    </form>`;
+                document.body.appendChild(gate);
+                gate.querySelector('#moderator-login-form').addEventListener('submit', async event => {
+                    event.preventDefault();
+                    const username = gate.querySelector('#moderator-login-name').value.trim();
+                    const email = MODERATOR_EMAILS[username.toLowerCase()];
+                    const errorNode = gate.querySelector('#moderator-login-error');
+                    const submit = gate.querySelector('#moderator-login-submit');
+                    if (!email) {
+                        errorNode.textContent = 'Неизвестный логин модератора';
+                        return;
+                    }
+                    submit.disabled = true;
+                    submit.textContent = 'Проверка…';
+                    errorNode.textContent = '';
+                    try {
+                        const response = await fetch(`${FIREBASE_AUTH_URL}/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                email,
+                                password: gate.querySelector('#moderator-login-password').value,
+                                returnSecureToken: true
+                            })
+                        });
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.error?.message || 'Ошибка входа');
+                        saveModeratorAuth({ ...data, username });
+                        gate.remove();
+                        resolve(true);
+                    } catch (error) {
+                        const messages = {
+                            EMAIL_NOT_FOUND: 'Аккаунт ещё не создан в Firebase Authentication',
+                            INVALID_PASSWORD: 'Неверный пароль',
+                            INVALID_LOGIN_CREDENTIALS: 'Неверный логин или пароль',
+                            OPERATION_NOT_ALLOWED: 'В Firebase не включён вход по Email/Password'
+                        };
+                        errorNode.textContent = messages[error.message] || 'Не удалось войти. Проверьте настройки Firebase и подключение.';
+                        submit.disabled = false;
+                        submit.textContent = 'Войти';
+                    }
+                });
+            });
+        }
+
+        window.onload = async function() {
             const urlParams = new URLSearchParams(window.location.search);
             const modeParam = urlParams.get('mode');
 
+            if (modeParam === 'overlay') switchView('overlay');
+            if (!await ensureModeratorAuth()) return;
             renderCustomWidgetsMenu();
 
             if (modeParam === 'overlay') {
                 switchView('overlay');
                 setInterval(fetchStateFromCloud, 1000);
                 setInterval(fetchFastUpdatesFromCloud, 100);
+                setInterval(pollVoiceOffers, 1000);
                 fetchStateFromCloud();
+                pollVoiceOffers();
             } else {
                 switchView('operator');
+                startModeratorPresence();
                 setInterval(() => {
                     if (!isDragging) fetchStateFromCloud();
                 }, 2000);
                 fetchStateFromCloud();
             }
 
-            window.addEventListener('mousemove', handleGlobalMouseMove);
-            window.addEventListener('mouseup', handleGlobalMouseUp);
-            window.addEventListener('touchmove', handleGlobalTouchMove, { passive: false });
-            window.addEventListener('touchend', handleGlobalMouseUp);
+            window.addEventListener('pointermove', handleGlobalMouseMove);
+            window.addEventListener('pointerup', handleGlobalMouseUp);
+            window.addEventListener('pointercancel', handleGlobalMouseUp);
 
             const previewContainer = document.getElementById('preview-container');
             if (previewContainer) {
@@ -626,7 +867,7 @@
             if (uploadedMediaAssetKeys.has(assetKey)) return Promise.resolve();
             if (pendingMediaAssetUploads.has(assetKey)) return pendingMediaAssetUploads.get(assetKey);
 
-            const upload = fetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json`, {
+            const upload = firebaseFetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json`, {
                 method: 'PUT',
                 body: JSON.stringify(item.url),
                 headers: { 'Content-Type': 'application/json' }
@@ -644,7 +885,7 @@
             if (!item.assetKey || item.url || pendingMediaAssetLoads.has(item.assetKey)) return;
             const assetKey = item.assetKey;
             pendingMediaAssetLoads.add(assetKey);
-            fetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json`, { cache: 'force-cache' })
+            firebaseFetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json`, { cache: 'force-cache' })
                 .then(res => {
                     if (!res.ok) throw new Error(`HTTP ${res.status}`);
                     return res.json();
@@ -686,7 +927,7 @@
             cloudWritesPending++;
             cloudSaveQueue = cloudSaveQueue.catch(() => {}).then(() =>
                 Promise.all(snapshot.map(uploadMediaAsset))
-                    .then(() => fetch(FIREBASE_DB_URL, {
+                    .then(() => firebaseFetch(FIREBASE_DB_URL, {
                         method: 'PUT',
                         body: JSON.stringify(cleanOverlays),
                         headers: { 'Content-Type': 'application/json' }
@@ -702,7 +943,7 @@
 
         function sendFastUpdate(item, fields) {
             const url = `${FIREBASE_FAST_UPDATES_URL}/${encodeURIComponent(item.id)}.json`;
-            fetch(url, {
+            firebaseFetch(url, {
                 method: 'PATCH',
                 body: JSON.stringify(fields),
                 headers: { 'Content-Type': 'application/json' }
@@ -714,7 +955,7 @@
             if (index < 0) return;
             const url = FIREBASE_DB_URL.replace(/\.json$/, `/${index}.json`);
             cloudWritesPending++;
-            fetch(url, {
+            firebaseFetch(url, {
                 method: 'PATCH',
                 body: JSON.stringify(fields),
                 headers: { 'Content-Type': 'application/json' }
@@ -726,7 +967,7 @@
         function fetchFastUpdatesFromCloud() {
             if (fastUpdatesFetchPending) return;
             fastUpdatesFetchPending = true;
-            fetch(`${FIREBASE_FAST_UPDATES_URL}.json`, { cache: 'no-store' })
+            firebaseFetch(`${FIREBASE_FAST_UPDATES_URL}.json`, { cache: 'no-store' })
                 .then(res => res.json())
                 .then(updates => {
                     if (!updates || typeof updates !== 'object') return;
@@ -781,14 +1022,20 @@
             if (isDragging || cloudWritesPending > 0 || cloudStateFetchPending) return;
             cloudStateFetchPending = true;
 
-            fetch(FIREBASE_DB_URL, { cache: 'no-store' })
+            firebaseFetch(FIREBASE_DB_URL, { cache: 'no-store' })
                 .then(res => res.json())
                 .then(data => {
                     let newData = [];
                     if (data && Array.isArray(data)) newData = data;
                     else if (data && typeof data === 'object') newData = Object.values(data);
-                    newData.forEach(item => {
+                    const previousItems = new Map(activeOverlays.map(item => [item.id, item]));
+                    newData = newData.map(item => {
+                        const previous = item && previousItems.get(item.id);
+                        if (item && item.assetKey && !item.url && previous && previous.assetKey === item.assetKey && previous.url) {
+                            item.url = previous.url;
+                        }
                         if (item && item.assetKey && !item.url) loadMediaAsset(item);
+                        return item;
                     });
 
                     const newString = JSON.stringify(newData.map(getCloudStateFingerprint));
@@ -1306,11 +1553,15 @@
 
         // --- ПЛАВНОЕ ПЕРЕТАСКИВАНИЕ В РЕАЛЬНОМ ВРЕМЕНИ БЕЗ СБРОСА ВИДЕО ---
         function startDrag(e, itemId) {
+            if (e.button !== undefined && e.button !== 0) return;
             e.preventDefault();
+            if (e.currentTarget && e.currentTarget.setPointerCapture && e.pointerId !== undefined) {
+                e.currentTarget.setPointerCapture(e.pointerId);
+            }
             isDragging = true;
             dragTargetId = itemId;
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const clientX = e.clientX;
+            const clientY = e.clientY;
             dragStartX = clientX;
             dragStartY = clientY;
 
@@ -1324,7 +1575,10 @@
         function startOverlayResize(itemId, direction, e) {
             e.preventDefault();
             e.stopPropagation();
-            const point = e.touches ? e.touches[0] : e;
+            if (e.currentTarget && e.currentTarget.setPointerCapture && e.pointerId !== undefined) {
+                e.currentTarget.setPointerCapture(e.pointerId);
+            }
+            const point = e;
             const item = activeOverlays.find(current => current.id === itemId);
             const node = document.querySelector(`#operator-overlay-canvas [data-id="${itemId}"]`);
             if (!item || !node) return;
@@ -1443,6 +1697,224 @@
             }
         }
 
+        function voiceSessionUrl(sessionId) {
+            return `${FIREBASE_VOICE_URL}/sessions/${encodeURIComponent(sessionId)}.json`;
+        }
+
+        function createVoiceSessionId() {
+            return window.crypto && crypto.randomUUID
+                ? crypto.randomUUID()
+                : `voice_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        }
+
+        function waitForIceGatheringComplete(connection) {
+            if (connection.iceGatheringState === 'complete') return Promise.resolve();
+            return new Promise(resolve => {
+                const finish = () => {
+                    clearTimeout(timeoutId);
+                    connection.removeEventListener('icegatheringstatechange', checkState);
+                    resolve();
+                };
+                const checkState = () => {
+                    if (connection.iceGatheringState === 'complete') finish();
+                };
+                const timeoutId = setTimeout(finish, 15000);
+                connection.addEventListener('icegatheringstatechange', checkState);
+                checkState();
+            });
+        }
+
+        function updateMicButton(state) {
+            const button = document.getElementById('moderator-mic-button');
+            if (!button) return;
+            if (state === 'on') {
+                button.className = 'bg-red-600 hover:bg-red-500 text-white border border-red-400 px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer';
+                button.innerHTML = '<i class="fa-solid fa-microphone"></i><span>Выключить микрофон</span>';
+            } else if (state === 'connecting') {
+                button.className = 'bg-amber-700 hover:bg-amber-600 text-white border border-amber-500 px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer';
+                button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>Подключение микрофона…</span>';
+            } else {
+                button.className = 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer';
+                button.innerHTML = '<i class="fa-solid fa-microphone"></i><span>Включить микрофон</span>';
+            }
+        }
+
+        async function toggleModeratorMic() {
+            if (moderatorMicSessionId) {
+                stopModeratorMic();
+                return;
+            }
+            await startModeratorMic();
+        }
+
+        async function startModeratorMic() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof RTCPeerConnection === 'undefined') {
+                showToast('Микрофон требует современный браузер и HTTPS', 'warning');
+                return;
+            }
+            const sessionId = createVoiceSessionId();
+            moderatorMicSessionId = sessionId;
+            updateMicButton('connecting');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                    video: false
+                });
+                if (moderatorMicSessionId !== sessionId) {
+                    stream.getTracks().forEach(track => track.stop());
+                    return;
+                }
+                moderatorMicStream = stream;
+                const connection = new RTCPeerConnection(VOICE_RTC_CONFIG);
+                moderatorMicConnection = connection;
+                stream.getAudioTracks().forEach(track => connection.addTrack(track, stream));
+                connection.onconnectionstatechange = () => {
+                    if (moderatorMicSessionId !== sessionId) return;
+                    if (connection.connectionState === 'connected') updateMicButton('on');
+                    if (connection.connectionState === 'failed') {
+                        showToast('Не удалось соединиться с OBS; возможно, нужен TURN-сервер', 'warning');
+                        stopModeratorMic();
+                    }
+                };
+
+                const offer = await connection.createOffer();
+                await connection.setLocalDescription(offer);
+                await waitForIceGatheringComplete(connection);
+                if (moderatorMicSessionId !== sessionId) return;
+                const response = await firebaseFetch(voiceSessionUrl(sessionId), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        status: 'waiting',
+                        createdAt: Date.now(),
+                        offer: connection.localDescription
+                    })
+                });
+                if (!response.ok) throw new Error(`Firebase HTTP ${response.status}`);
+                await waitForVoiceAnswer(sessionId, connection);
+            } catch (error) {
+                console.error('Ошибка подключения микрофона:', error);
+                showToast(error.name === 'NotAllowedError'
+                    ? 'Разрешите доступ к микрофону в браузере'
+                    : 'Не удалось включить микрофон; проверьте подключение OBS', 'warning');
+                if (moderatorMicSessionId === sessionId) stopModeratorMic();
+            }
+        }
+
+        async function waitForVoiceAnswer(sessionId, connection) {
+            for (let attempt = 0; attempt < 60; attempt++) {
+                if (moderatorMicSessionId !== sessionId) return;
+                const response = await firebaseFetch(voiceSessionUrl(sessionId), { cache: 'no-store' });
+                if (!response.ok) throw new Error(`Firebase HTTP ${response.status}`);
+                const session = await response.json();
+                if (session && session.answer) {
+                    await connection.setRemoteDescription(session.answer);
+                    if (moderatorMicSessionId === sessionId) updateMicButton('on');
+                    return;
+                }
+                await new Promise(resolve => setTimeout(resolve, 800));
+            }
+            throw new Error('OBS did not answer');
+        }
+
+        function stopModeratorMic() {
+            const sessionId = moderatorMicSessionId;
+            moderatorMicSessionId = null;
+            if (moderatorMicConnection) {
+                moderatorMicConnection.close();
+                moderatorMicConnection = null;
+            }
+            if (moderatorMicStream) {
+                moderatorMicStream.getTracks().forEach(track => track.stop());
+                moderatorMicStream = null;
+            }
+            updateMicButton('off');
+            if (sessionId) {
+                firebaseFetch(voiceSessionUrl(sessionId), { method: 'DELETE' })
+                    .catch(error => console.error('Ошибка остановки микрофона:', error));
+            }
+        }
+
+        async function pollVoiceOffers() {
+            if (!document.body.classList.contains('obs-overlay-mode') || voiceOfferPollPending) return;
+            voiceOfferPollPending = true;
+            try {
+                const response = await firebaseFetch(`${FIREBASE_VOICE_URL}/sessions.json`, { cache: 'no-store' });
+                if (!response.ok) throw new Error(`Firebase HTTP ${response.status}`);
+                const sessions = await response.json() || {};
+                const liveSessionIds = new Set(Object.keys(sessions));
+                obsVoiceConnections.forEach((entry, sessionId) => {
+                    if (!liveSessionIds.has(sessionId)) closeObsVoiceConnection(sessionId);
+                });
+                Object.entries(sessions).forEach(([sessionId, session]) => {
+                    if (!session || !session.offer || handledVoiceSessions.has(sessionId)) return;
+                    if (session.status === 'ended' || Date.now() - (session.createdAt || 0) > 120000) return;
+                    if (obsVoiceConnections.size >= 8) return;
+                    handledVoiceSessions.add(sessionId);
+                    answerVoiceOffer(sessionId, session).catch(error => {
+                        console.error('Ошибка голосового соединения OBS:', error);
+                        closeObsVoiceConnection(sessionId);
+                    });
+                });
+            } catch (error) {
+                console.error('Ошибка проверки голосовых запросов:', error);
+            } finally {
+                voiceOfferPollPending = false;
+            }
+        }
+
+        async function answerVoiceOffer(sessionId, session) {
+            const connection = new RTCPeerConnection(VOICE_RTC_CONFIG);
+            const entry = { connection, audio: null };
+            obsVoiceConnections.set(sessionId, entry);
+            connection.ontrack = event => {
+                const current = obsVoiceConnections.get(sessionId);
+                if (!current || current.connection !== connection) return;
+                const audio = document.createElement('audio');
+                audio.autoplay = true;
+                audio.playsInline = true;
+                audio.volume = 1;
+                audio.srcObject = event.streams[0] || new MediaStream([event.track]);
+                audio.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;';
+                document.body.appendChild(audio);
+                current.audio = audio;
+                audio.play().catch(error => console.error('OBS заблокировал воспроизведение аудио:', error));
+            };
+            connection.onconnectionstatechange = () => {
+                if (connection.connectionState === 'failed' || connection.connectionState === 'closed') {
+                    closeObsVoiceConnection(sessionId);
+                }
+            };
+            await connection.setRemoteDescription(session.offer);
+            const answer = await connection.createAnswer();
+            await connection.setLocalDescription(answer);
+            await waitForIceGatheringComplete(connection);
+            const response = await firebaseFetch(voiceSessionUrl(sessionId), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    answer: connection.localDescription,
+                    status: 'answered',
+                    answeredAt: Date.now()
+                })
+            });
+            if (!response.ok) throw new Error(`Firebase HTTP ${response.status}`);
+        }
+
+        function closeObsVoiceConnection(sessionId) {
+            const entry = obsVoiceConnections.get(sessionId);
+            if (!entry) return;
+            obsVoiceConnections.delete(sessionId);
+            if (entry.audio) {
+                entry.audio.pause();
+                entry.audio.srcObject = null;
+                entry.audio.remove();
+            }
+            entry.connection.close();
+        }
+
+        window.addEventListener('pagehide', stopModeratorMic);
+
         function onStreamProviderChange() {
             const provider = document.getElementById('stream-provider').value;
             const channelName = document.getElementById('twitch-channel-input').value.trim() || 'dell11q';
@@ -1482,6 +1954,13 @@
             return JSON.stringify(contentState);
         }
 
+        function isSameMediaSource(node, item) {
+            if (!node || !item.url) return false;
+            const tagName = item.type === 'image' ? 'img' : (item.type === 'video' ? 'video' : (item.type === 'youtube' ? 'iframe' : ''));
+            const mediaNode = tagName ? node.querySelector(tagName) : null;
+            return Boolean(mediaNode && mediaNode.getAttribute('src') === item.url);
+        }
+
         function renderOverlays() {
             const obsCanvas = document.getElementById('obs-render-canvas');
             const operatorCanvas = document.getElementById('operator-overlay-canvas');
@@ -1508,7 +1987,14 @@
                 canvases.forEach(canvas => {
                     const isInteractive = canvas.id === 'operator-overlay-canvas';
                     let node = canvas.querySelector(`[data-id="${item.id}"]`);
-                    if (!node || node.dataset.renderSignature !== signature) {
+                    if (node && node.dataset.renderSignature !== signature && isSameMediaSource(node, item)) {
+                        node.dataset.renderSignature = signature;
+                        node.style.left = item.x + '%';
+                        node.style.top = item.y + '%';
+                        applyOverlayTransform(node, item);
+                        const video = node.querySelector('video');
+                        if (video && item.volume !== undefined) video.volume = item.volume;
+                    } else if (!node || node.dataset.renderSignature !== signature) {
                         const replacement = createOverlayElementNode(item, isInteractive, !node);
                         if (node) {
                             canvas.replaceChild(replacement, node);
@@ -1551,8 +2037,7 @@
             if (!isInteractive) node.style.transition = 'left 100ms cubic-bezier(0.2, 0.8, 0.2, 1), top 100ms cubic-bezier(0.2, 0.8, 0.2, 1)';
 
             if (isInteractive) {
-                node.onmousedown = (e) => startDrag(e, item.id);
-                node.ontouchstart = (e) => startDrag(e, item.id);
+                node.onpointerdown = (e) => startDrag(e, item.id);
             }
 
             let contentHtml = '';
@@ -1585,8 +2070,7 @@
                     handle.type = 'button';
                     handle.className = `resize-handle absolute z-10 w-3 h-8 rounded-full bg-indigo-500 border border-white/80 shadow ${position}`;
                     handle.title = direction === 'horizontal' ? 'Растянуть по ширине' : 'Растянуть по высоте';
-                    handle.onmousedown = event => startOverlayResize(item.id, direction, event);
-                    handle.ontouchstart = event => startOverlayResize(item.id, direction, event);
+                    handle.onpointerdown = event => startOverlayResize(item.id, direction, event);
                     node.appendChild(handle);
                 });
             }
