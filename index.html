@@ -213,9 +213,6 @@
                         <button id="tab-btn-awards" onclick="switchControlTab('awards')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-trophy text-amber-400"></i> Премии
                         </button>
-                        <button id="tab-btn-dog" onclick="switchControlTab('dog')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
-                            <i class="fa-solid fa-dog text-orange-300"></i> Питомец
-                        </button>
                         <button id="tab-btn-sounds" onclick="switchControlTab('sounds')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-volume-high text-pink-400"></i> Звуки
                         </button>
@@ -412,14 +409,8 @@
                     <div id="tab-content-awards" class="space-y-4 hidden">
                         <div>
                             <h3 class="text-sm font-bold text-white">Премия стримеру</h3>
-                            <p class="mt-1 text-[11px] leading-relaxed text-slate-400">Выбери, кто вручит награду, и прикрепи свой звук из списка модератора.</p>
+                            <p class="mt-1 text-[11px] leading-relaxed text-slate-400">Выбери звук из списка модератора и порадуй стримера наградой.</p>
                         </div>
-                        <label class="block text-[11px] font-semibold text-slate-400">Вручение
-                            <select id="award-delivery" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200">
-                                <option value="dog">Пёсик принесёт кубок 🐶</option>
-                                <option value="pop">Кубок эффектно выскочит 🏆</option>
-                            </select>
-                        </label>
                         <label class="block text-[11px] font-semibold text-slate-400">Звук премии
                             <select id="award-sound" onchange="saveInteractiveSoundChoice('award-sound','obs_award_sound')" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200"></select>
                         </label>
@@ -434,23 +425,6 @@
                             <button onclick="triggerStreamerAward(document.getElementById('award-custom-title').value)" class="rounded-lg bg-amber-600 hover:bg-amber-500 px-3 text-xs font-bold text-white">Вручить</button>
                         </div>
                         <div id="award-sound-hint" class="text-[10px] text-slate-500"></div>
-                    </div>
-
-                    <div id="tab-content-dog" class="space-y-4 hidden">
-                        <div>
-                            <h3 class="text-sm font-bold text-white">Пёсик модерации</h3>
-                            <p class="mt-1 text-[11px] leading-relaxed text-slate-400">Зови пёсика за поддержкой, снеком или отправляй патрулировать чат. Иногда он выскакивает к зрителям, облизывает экран и звонко гавкает!</p>
-                        </div>
-                        <label class="block text-[11px] font-semibold text-slate-400">Звук пёсика
-                            <select id="dog-sound" onchange="saveInteractiveSoundChoice('dog-sound','obs_dog_sound')" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200"></select>
-                        </label>
-                        <div class="grid grid-cols-2 gap-2">
-                            <button onclick="callStreamDog('support')" class="rounded-xl border border-sky-500/30 bg-slate-900 p-3 text-xs font-bold text-white hover:border-sky-300">💌 Поддержать стримера</button>
-                            <button onclick="callStreamDog('snack')" class="rounded-xl border border-amber-500/30 bg-slate-900 p-3 text-xs font-bold text-white hover:border-amber-300">🦴 Дать снек</button>
-                            <button onclick="callStreamDog('patrol')" class="rounded-xl border border-emerald-500/30 bg-slate-900 p-3 text-xs font-bold text-white hover:border-emerald-300">🕵️ На патруль</button>
-                            <button onclick="callStreamDog('hello')" class="rounded-xl border border-fuchsia-500/30 bg-slate-900 p-3 text-xs font-bold text-white hover:border-fuchsia-300">🐾 Позвать пёсика</button>
-                        </div>
-                        <div id="dog-sound-hint" class="text-[10px] text-slate-500"></div>
                     </div>
 
                     <div id="tab-content-sounds" class="space-y-3 hidden">
@@ -1504,7 +1478,7 @@
                             JSON.stringify(mergedState.map(getCloudStateFingerprint)) !== lastCloudString) {
                             lastCloudString = JSON.stringify(mergedState.map(getCloudStateFingerprint));
                             const urlsById = new Map(activeOverlays.map(item => [item.id, item.url]));
-                            activeOverlays = mergedState.map(item => ({ ...item, ...(urlsById.has(item.id) ? { url: urlsById.get(item.id) } : {}) }));
+                            activeOverlays = mergedState.filter(item => item.id !== 'moderation_dog_pet').map(item => ({ ...item, ...(urlsById.has(item.id) ? { url: urlsById.get(item.id) } : {}) }));
                             renderOverlaysSmart();
                         }
                     })
@@ -1614,6 +1588,7 @@
                     if (!newData.every(item => item && typeof item === 'object' && !Array.isArray(item) && typeof item.id === 'string' && typeof item.type === 'string')) {
                         throw new Error('В Firebase найдено состояние с неизвестным форматом; локальный список сохранён');
                     }
+                    newData = newData.filter(item => item.id !== 'moderation_dog_pet');
                     if (fetchMutationVersion !== overlayMutationVersion || cloudWritesPending > 0 || isDragging) return;
                     lastSyncedOverlaySnapshot = normalizeCloudOverlayList(newData);
                     const previousItems = new Map(activeOverlays.map(item => [item.id, item]));
@@ -3621,8 +3596,7 @@
 
         function renderInteractiveSoundSelectors() {
             const soundSelects = [
-                ['award-sound', 'obs_award_sound'],
-                ['dog-sound', 'obs_dog_sound']
+                ['award-sound', 'obs_award_sound']
             ];
             soundSelects.forEach(([selectId, storageKey]) => {
                 const select = document.getElementById(selectId);
@@ -3634,30 +3608,8 @@
                 select.value = customSoundsList.some(sound => sound.id === savedValue) ? savedValue : '';
             });
             const awardHint = document.getElementById('award-sound-hint');
-            const dogHint = document.getElementById('dog-sound-hint');
             const soundHint = customSoundsList.length ? 'Выбери звук из списка «Звуки».' : 'Сначала добавь звук во вкладке «Звуки», затем выбери его здесь.';
             if (awardHint) awardHint.textContent = soundHint;
-            if (dogHint) dogHint.textContent = soundHint;
-        }
-
-        function streamDogSvg() {
-            return `<svg class="event-dog" viewBox="0 0 280 250" role="img" aria-label="Пёсик модерации">
-                <ellipse cx="140" cy="231" rx="90" ry="12" fill="#11182755"/>
-                <path d="M78 130Q49 116 42 145Q39 172 70 184L98 160Z" fill="#9b542e" stroke="#542c20" stroke-width="6"/>
-                <path d="M195 127Q229 102 242 124Q250 143 222 157L197 151Z" fill="#9b542e" stroke="#542c20" stroke-width="6"/>
-                <path d="M77 126Q68 99 88 88L193 88Q216 105 210 152L199 205Q194 222 173 222H106Q84 215 82 194Z" fill="#d99a56" stroke="#714124" stroke-width="7"/>
-                <path d="M92 139Q65 114 64 83Q63 55 85 66Q104 73 111 118Z" fill="#8c482d" stroke="#542c20" stroke-width="6"/>
-                <path d="M184 117Q191 74 214 69Q237 68 224 105Q217 128 198 143Z" fill="#8c482d" stroke="#542c20" stroke-width="6"/>
-                <ellipse cx="140" cy="131" rx="75" ry="64" fill="#efbd78" stroke="#714124" stroke-width="7"/>
-                <ellipse cx="112" cy="123" rx="8" ry="11" fill="#211a18"/><ellipse cx="167" cy="123" rx="8" ry="11" fill="#211a18"/>
-                <circle cx="115" cy="119" r="3" fill="white"/><circle cx="170" cy="119" r="3" fill="white"/>
-                <ellipse cx="140" cy="150" rx="38" ry="28" fill="#fff0d7"/>
-                <ellipse cx="140" cy="141" rx="13" ry="9" fill="#30211c"/>
-                <path d="M128 161Q140 173 152 161" fill="none" stroke="#743a34" stroke-width="5" stroke-linecap="round"/>
-                <path class="event-dog-tongue" d="M137 164Q140 169 143 164Q154 174 149 191Q145 202 139 192Q130 180 137 164Z" fill="#f05b78" stroke="#a82f50" stroke-width="3"/>
-                <path d="M105 201Q140 217 175 201L170 218Q140 234 110 218Z" fill="#ef4444" stroke="#9f2634" stroke-width="5"/>
-                <path d="M136 214l8 0 0 13-8 0z" fill="#fbbf24"/><circle cx="140" cy="219" r="2" fill="#fff4bf"/>
-            </svg>`;
         }
 
         function sendTimedInteraction(title, html, durationMs = 8500) {
@@ -3680,175 +3632,23 @@
         function triggerStreamerAward(title) {
             const awardTitle = String(title || '').trim().slice(0, 64);
             if (!awardTitle) return showToast('Напиши название премии', 'warning');
-            const delivery = document.getElementById('award-delivery')?.value === 'dog' ? 'dog' : 'pop';
             const soundId = document.getElementById('award-sound')?.value;
-            const dog = streamDogSvg();
             const html = `<style>
-                .award-scene,.dog-event-scene{position:relative;width:1920px;height:1080px;display:grid;place-items:center;overflow:hidden;font-family:system-ui,sans-serif;pointer-events:none}
+                .award-scene{position:relative;width:1920px;height:1080px;display:grid;place-items:center;overflow:hidden;font-family:system-ui,sans-serif;pointer-events:none}
                 .award-card{position:relative;display:flex;align-items:center;gap:22px;padding:24px 34px;border:4px solid #fff7cc;border-radius:28px;background:linear-gradient(145deg,#fff9da,#fbbf24);box-shadow:0 0 0 6px #d97706,0 18px 60px #111827aa;color:#422006;animation:awardPop 7.5s cubic-bezier(.2,.8,.2,1) both}
                 .award-cup{font-size:82px;filter:drop-shadow(0 8px 4px #92400e66);animation:cupShine 1s ease-in-out infinite alternate}
                 .award-label{font-size:15px;font-weight:900;letter-spacing:.08em;color:#92400e}
                 .award-title{max-width:620px;margin-top:5px;font-size:clamp(25px,3vw,46px);line-height:1.05;font-weight:950;text-wrap:balance}
-                .award-dog{position:absolute;left:calc(50% - 510px);bottom:8%;width:250px;animation:dogDeliver 7.5s cubic-bezier(.2,.8,.2,1) both}
-                .award-dog .event-dog{width:100%}
                 @keyframes awardPop{0%{opacity:0;transform:translateY(50px) scale(.55)}12%,78%{opacity:1;transform:translateY(0) scale(1)}88%,100%{opacity:0;transform:translateY(-20px) scale(.94)}}
                 @keyframes cupShine{to{transform:rotate(-8deg) scale(1.08)}}
-                @keyframes dogDeliver{0%,10%{opacity:0;transform:translateX(-100px) scale(.7)}22%,76%{opacity:1;transform:translateX(0) scale(1)}88%,100%{opacity:0;transform:translateX(60px) scale(.9)}}
-                .event-dog-tongue{opacity:0;transform-origin:140px 164px}
-                .pet-lick .event-dog-tongue{opacity:1;animation:lickTongue .35s ease-in-out infinite alternate}
-                @keyframes lickTongue{to{transform:scaleY(1.35) translateY(5px)}}
-                .dog-event-bubble{position:absolute;left:50%;top:17%;transform:translateX(-50%);padding:14px 23px;border:3px solid white;border-radius:24px;background:#fff7ed;color:#431407;font-size:clamp(20px,2.5vw,34px);font-weight:950;box-shadow:0 0 0 4px #f97316,0 12px 32px #11182766;animation:bubblePop .5s cubic-bezier(.2,.8,.2,1) both}
-                .dog-event-scene .event-dog{position:absolute;left:50%;top:50%;width:clamp(260px,30vw,430px);transform:translate(-50%,-50%);filter:drop-shadow(0 20px 20px #11182788);animation:dogArrive 7.5s ease both}
-                .pet-lick .event-dog{width:clamp(480px,67vw,900px);animation:dogLickScreen 5.5s ease-in-out both}
-                .pet-support .event-dog,.pet-snack .event-dog,.pet-patrol .event-dog{animation:dogHop 7s ease-in-out both}
-                @keyframes dogArrive{0%{opacity:0;transform:translate(65vw,20vh) scale(.45)}16%,77%{opacity:1;transform:translate(-50%,-50%) scale(1)}90%,100%{opacity:0;transform:translate(-65vw,25vh) scale(.55)}}
-                @keyframes dogLickScreen{0%{opacity:0;transform:translate(-50%,60vh) scale(.4)}18%,70%{opacity:1;transform:translate(-50%,-50%) scale(1)}82%{transform:translate(-50%,-50%) scale(1.08)}100%{opacity:0;transform:translate(-50%,60vh) scale(.4)}}
-                @keyframes dogHop{0%{opacity:0;transform:translate(-50%,20vh) scale(.55)}15%,78%{opacity:1;transform:translate(-50%,-50%) scale(1)}88%,100%{opacity:0;transform:translate(-50%,20vh) scale(.6)}}
-                @keyframes bubblePop{from{opacity:0;scale:.75}to{opacity:1;scale:1}}
-                @media(prefers-reduced-motion:reduce){.award-card,.award-dog,.award-cup,.dog-event-bubble,.dog-event-scene .event-dog{animation-duration:.01ms!important;animation-iteration-count:1!important}}
-            </style>${delivery === 'dog'
-                ? `<div class="award-scene"><div class="award-dog">${dog}</div><div class="award-card"><span class="award-cup">🏆</span><div><div class="award-label">ПРЕМИЯ ОТ МОДЕРАТОРОВ</div><div class="award-title">${escapeHtml(awardTitle)}</div></div></div></div>`
-                : `<div class="award-scene"><div class="award-card"><span class="award-cup">🏆</span><div><div class="award-label">ПРЕМИЯ ОТ МОДЕРАТОРОВ</div><div class="award-title">${escapeHtml(awardTitle)}</div></div></div></div>`}`;
+                @media(prefers-reduced-motion:reduce){.award-card,.award-cup{animation-duration:.01ms!important;animation-iteration-count:1!important}}
+            </style><div class="award-scene"><div class="award-card"><span class="award-cup">🏆</span><div><div class="award-label">ПРЕМИЯ ОТ МОДЕРАТОРОВ</div><div class="award-title">${escapeHtml(awardTitle)}</div></div></div></div>`;
             sendTimedInteraction('Премия: ' + awardTitle, html, 8500);
             if (soundId) playCustomSound(soundId);
         }
 
-        /* const DOG_PET_ID = 'moderation_dog_pet';
-        const DOG_CORNERS = {
-            'bottom-right': { x: 92, y: 89 },
-            'bottom-left': { x: 8, y: 89 },
-            'top-right': { x: 92, y: 11 },
-            'top-left': { x: 8, y: 11 }
-        };
-
-        function dogPetHtml(state = 'sitting') {
-            const message = state === 'leaving' ? 'Ой… я пойду 😢' : (state === 'arriving' ? 'Я на посту! 🐾' : 'На посту!');
-            return `<style>
-                .dog-pet{position:relative;width:260px;height:210px;pointer-events:none;font-family:system-ui,sans-serif}
-                .dog-pet-dog{position:absolute;left:22px;bottom:0;width:216px;filter:drop-shadow(0 10px 10px #11182788);transform-origin:50% 100%}
-                .dog-pet-dog svg{display:block;width:100%;height:auto}
-                .dog-pet-bubble{position:absolute;z-index:2;left:50%;top:8px;transform:translateX(-50%);white-space:nowrap;padding:8px 13px;border:2px solid white;border-radius:16px;background:#fff7ed;color:#713f12;font-size:13px;font-weight:900;box-shadow:0 4px 14px #11182744}
-                .dog-pet-arriving .dog-pet-dog{animation:dogPetArrive .95s cubic-bezier(.2,.8,.2,1) both}
-                .dog-pet-arriving .dog-pet-bubble{animation:dogPetBubble .3s .7s both}
-                .dog-pet-sitting .dog-pet-dog{animation:dogPetSit 2.8s ease-in-out infinite}
-                .dog-pet-leaving .dog-pet-dog{animation:dogPetLeave 1.15s ease-in both}
-                .dog-pet-leaving .dog-pet-bubble{animation:dogPetBubble .25s reverse both}
-                @keyframes dogPetArrive{0%{opacity:0;transform:translate(-150px,22px) scale(.72)}65%{opacity:1;transform:translate(8px,-8px) scale(1.04)}82%{transform:translate(-4px,2px) scale(.98)}100%{opacity:1;transform:translate(0,0) scale(1)}}
-                @keyframes dogPetSit{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(-4px) rotate(-1deg)}}
-                @keyframes dogPetLeave{0%{opacity:1;transform:translate(0,0) scale(1)}25%{transform:translateY(-12px) rotate(-8deg)}100%{opacity:0;transform:translate(180px,26px) scale(.65)}}
-                @keyframes dogPetBubble{from{opacity:0;scale:.75}to{opacity:1;scale:1}}
-                @media(prefers-reduced-motion:reduce){.dog-pet-dog,.dog-pet-bubble{animation-duration:.01ms!important;animation-iteration-count:1!important}}
-            </style><div class="dog-pet dog-pet-${state}"><div class="dog-pet-bubble">${message}</div><div class="dog-pet-dog">${streamDogSvg()}</div></div>`;
-        }
-
-        function syncDogPresenceControls() {
-            const toggle = document.getElementById('dog-presence-toggle');
-            const cornerSelect = document.getElementById('dog-corner');
-            const status = document.getElementById('dog-presence-status');
-            const pet = activeOverlays.find(item => item.id === DOG_PET_ID);
-            const corner = localStorage.getItem('obs_dog_corner') || 'bottom-right';
-            if (cornerSelect) cornerSelect.value = DOG_CORNERS[corner] ? corner : 'bottom-right';
-            if (toggle) toggle.checked = Boolean(pet && !pet.html?.includes('dog-pet-leaving'));
-            if (status) status.textContent = toggle?.checked ? `Пёсик на посту: ${cornerSelect?.selectedOptions[0]?.textContent || 'в углу'}.` : 'Пёсик пока не вышел на экран.';
-        }
-
-        function toggleStreamDogPresence(visible) {
-            const cornerSelect = document.getElementById('dog-corner');
-            const cornerName = DOG_CORNERS[cornerSelect?.value] ? cornerSelect.value : 'bottom-right';
-            const point = DOG_CORNERS[cornerName];
-            let pet = activeOverlays.find(item => item.id === DOG_PET_ID);
-            const status = document.getElementById('dog-presence-status');
-            try { localStorage.setItem('obs_dog_corner', cornerName); } catch (error) { console.warn('Не удалось сохранить угол пёсика:', error); }
-
-            if (visible) {
-                if (pet) {
-                    pet.html = dogPetHtml('arriving');
-                    pet.x = point.x;
-                    pet.y = point.y;
-                    pet.hidden = false;
-                } else {
-                    pet = { id: DOG_PET_ID, type: 'widget', title: 'Пёсик модерации', html: dogPetHtml('arriving'), anim: 'anim-none', scale: 1, width: '260px', height: '210px', x: point.x, y: point.y, hidden: false };
-                    activeOverlays.push(pet);
-                }
-                if (status) status.textContent = 'Пёсик уже бежит на своё место! 🐶';
-                renderOverlays();
-                saveAndBroadcast().then(saved => {
-                    if (saved) window.setTimeout(() => {
-                        const currentPet = activeOverlays.find(item => item.id === DOG_PET_ID);
-                        if (currentPet?.html?.includes('dog-pet-arriving')) {
-                            currentPet.html = dogPetHtml('sitting');
-                            renderOverlaysSmart();
-                            saveAndBroadcast();
-                        }
-                    }, 1100);
-                });
-                showToast('Пёсик радостно прибежал и сел на пост!');
-                return;
-            }
-
-            if (!pet) {
-                if (status) status.textContent = 'Пёсик пока не вышел на экран.';
-                renderOverlays();
-                return;
-            }
-            pet.html = dogPetHtml('leaving');
-            if (status) status.textContent = 'Пёсик расстроился и уходит…';
-            renderOverlays();
-            saveAndBroadcast().then(saved => {
-                if (!saved) return;
-                window.setTimeout(() => {
-                    const currentPet = activeOverlays.find(item => item.id === DOG_PET_ID);
-                    if (currentPet?.html?.includes('dog-pet-leaving')) {
-                        activeOverlays = activeOverlays.filter(item => item.id !== DOG_PET_ID);
-                        renderOverlaysSmart();
-                        saveAndBroadcast();
-                        if (status) status.textContent = 'Пёсик ушёл с экрана. Позови его снова, когда он понадобится.';
-                    }
-                }, 1200);
-            });
-            showToast('Пёсик немного загрустил и убежал отдыхать.');
-        }
-
-        function moveStreamDog(cornerName) {
-            const point = DOG_CORNERS[cornerName];
-            if (!point) return;
-            try { localStorage.setItem('obs_dog_corner', cornerName); } catch (error) { console.warn('Не удалось сохранить угол пёсика:', error); }
-            const pet = activeOverlays.find(item => item.id === DOG_PET_ID);
-            if (pet && !pet.html?.includes('dog-pet-leaving')) {
-                pet.x = point.x;
-                pet.y = point.y;
-                renderOverlays();
-                saveAndBroadcast();
-            }
-            syncDogPresenceControls();
-        }
-
-        */
-        function callStreamDog(action) {
-            const rareLick = Math.random() < 0.08;
-            const pose = rareLick ? 'lick' : (['support', 'snack', 'patrol'].includes(action) ? action : 'hello');
-            const messages = {
-                support: 'Пёсик принёс поддержку! Ты справишься!',
-                snack: 'Снек доставлен. Чат под присмотром.',
-                patrol: 'Патруль завершён: стример всё ещё красавчик.',
-                hello: 'Модеры звали? Я уже тут!',
-                lick: 'ГАВ! *лизь экрана* Привет, зрители!'
-            };
-            const soundId = document.getElementById('dog-sound')?.value;
-            const dog = streamDogSvg();
-            const html = `<style>
-                .dog-event-scene{position:relative}
-                .dog-event-scene:after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 42%,#ffffff88 49%,transparent 57%);transform:translateX(-120%);animation:screenLick .55s ease-in-out 1.9s 2}
-                .pet-lick:after{background:linear-gradient(100deg,transparent 37%,#fff9 46%,#ffffffdd 50%,#fff9 54%,transparent 63%)}
-                @keyframes screenLick{to{transform:translateX(120%)}}
-            </style><div class="dog-event-scene pet-${pose}"><div class="dog-event-bubble">${escapeHtml(messages[pose])}</div>${dog}</div>`;
-            sendTimedInteraction(rareLick ? 'Пёсик: редкое облизывание экрана!' : 'Пёсик модерации', html, rareLick ? 6000 : 8000);
-            if (soundId) playCustomSound(soundId);
-            if (rareLick) showToast('Редкое событие! Пёсик вышел поздороваться со зрителями 🐶');
-        }
-
         function switchControlTab(tab) {
-            ['text', 'image', 'video', 'widgets', 'awards', 'dog', 'sounds'].forEach(t => {
+            ['text', 'image', 'video', 'widgets', 'awards', 'sounds'].forEach(t => {
                 const btn = document.getElementById(`tab-btn-${t}`);
                 const content = document.getElementById(`tab-content-${t}`);
                 if (t === tab) {
@@ -3861,7 +3661,7 @@
                     content.classList.add('hidden');
                 }
             });
-            if (['sounds', 'awards', 'dog'].includes(tab)) loadModeratorSounds().then(renderInteractiveSoundSelectors);
+            if (['sounds', 'awards'].includes(tab)) loadModeratorSounds().then(renderInteractiveSoundSelectors);
         }
 
         function copyOverlayLink() {
@@ -3876,6 +3676,7 @@
         }
 
         function showToast(message, type = 'info') {
+            if (document.body.classList.contains('obs-overlay-mode')) return;
             const container = document.getElementById('toast-container');
             if (!container) return;
             const toast = document.createElement('div');
