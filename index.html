@@ -1873,16 +1873,49 @@
 
         let videoVolumeSaveTimer = null;
         function applyOverlayVideoVolume(node, item) {
-            if (item.type !== 'video') return;
-            const video = node.querySelector('video');
-            if (video) video.volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.8)));
+            const volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.8)));
+            if (item.type === 'video') {
+                const video = node.querySelector('video');
+                if (video) video.volume = volume;
+                return;
+            }
+            const frame = node.querySelector('iframe');
+            if (!frame?.contentWindow) return;
+            if (item.type === 'youtube') {
+                const origin = new URL(frame.src).origin;
+                frame.contentWindow.postMessage(JSON.stringify({
+                    event: 'command', func: 'setVolume', args: [Math.round(volume * 100)]
+                }), origin);
+                frame.contentWindow.postMessage(JSON.stringify({
+                    event: 'command', func: volume === 0 ? 'mute' : 'unMute', args: []
+                }), origin);
+            } else if (item.type === 'tiktok') {
+                frame.contentWindow.postMessage({
+                    'x-tiktok-player': true, type: 'setVolume', value: Math.round(volume * 100)
+                }, 'https://www.tiktok.com');
+            }
         }
+
+        window.addEventListener('message', event => {
+            if (!['https://www.youtube-nocookie.com', 'https://www.youtube.com', 'https://www.tiktok.com'].includes(event.origin)) return;
+            let data = event.data;
+            if (typeof data === 'string') {
+                try { data = JSON.parse(data); } catch { return; }
+            }
+            if (data?.event !== 'onReady' && !(data?.['x-tiktok-player'] && data.type === 'onPlayerReady')) return;
+            for (const item of activeOverlays) {
+                for (const canvasId of ['operator-overlay-canvas', 'obs-render-canvas']) {
+                    const node = document.getElementById(canvasId)?.querySelector(`[data-id="${item.id}"]`);
+                    if (node?.querySelector('iframe')?.contentWindow === event.source) applyOverlayVideoVolume(node, item);
+                }
+            }
+        });
 
         function onLiveVolumeInput(value) {
             const percent = Math.max(0, Math.min(100, Number(value)));
             if (!Number.isFinite(percent)) return;
             document.getElementById('vol-val').textContent = percent + '%';
-            const videos = activeOverlays.filter(item => item.type === 'video');
+            const videos = activeOverlays.filter(item => ['video', 'youtube', 'tiktok'].includes(item.type));
             for (const item of videos) {
                 item.volume = percent / 100;
                 for (const canvasId of ['operator-overlay-canvas', 'obs-render-canvas']) {
@@ -3624,7 +3657,9 @@
             } else if (item.type === 'video') {
                 contentHtml = `<video src="${escapeHtml(item.url)}" autoplay loop playsinline preload="auto" class="max-w-[500px] rounded-2xl shadow-2xl"></video>`;
             } else if (item.type === 'youtube') {
-                contentHtml = `<iframe src="${escapeHtml(item.url)}" class="w-[500px] h-[281px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+                const playerUrl = new URL(item.url);
+                playerUrl.searchParams.set('enablejsapi', '1');
+                contentHtml = `<iframe src="${escapeHtml(playerUrl.href)}" class="w-[500px] h-[281px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
             } else if (item.type === 'tiktok') {
                 contentHtml = `<iframe src="${escapeHtml(item.url)}" class="w-[325px] h-[578px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
             } else if (item.type === 'widget') {
@@ -3634,6 +3669,16 @@
             }
 
             node.innerHTML = contentHtml;
+            if (item.type === 'youtube' || item.type === 'tiktok') {
+                const frame = node.querySelector('iframe');
+                frame.addEventListener('load', () => {
+                    if (item.type === 'youtube') {
+                        frame.contentWindow.postMessage(JSON.stringify({ event: 'listening' }), new URL(frame.src).origin);
+                    }
+                    const current = activeOverlays.find(candidate => candidate.id === item.id) || item;
+                    applyOverlayVideoVolume(node, current);
+                });
+            }
             applyOverlayVideoVolume(node, item);
             if (item.type === 'ephemeral-widget') {
                 window.setTimeout(() => {
