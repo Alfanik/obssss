@@ -1935,7 +1935,44 @@
                     @keyframes chibiHover{from{transform:translateY(-5px) rotate(-1deg)}to{transform:translateY(5px) rotate(1deg)}}
                     @keyframes chibiSparkle{from{transform:scale(.7) rotate(-12deg);opacity:.5}to{transform:scale(1.15) rotate(12deg);opacity:1}}
                     @media(max-width:600px){.chibi-flight-scene{height:290px;gap:2px}.chibi-board{padding:10px;border-radius:17px;border-width:3px}.chibi-board-link{font-size:10px}.chibi-avatar{width:43vw}}
-                    @media(prefers-reduced-motion:reduce){.chibi-flight-scene,.chibi-avatar,.chibi-board,.chibi-spark{animation-duration:.01ms!important;animation-iteration-count:1!important}}
+                    /* Choreography: fly, settle, present, pocket, accelerate. */
+                    .chibi-flight-scene{--duration:20s;position:relative;width:clamp(170px,26vw,290px);height:auto;aspect-ratio:300/360;display:block;perspective:none;isolation:isolate;filter:drop-shadow(0 9px 8px #080b1833);animation:chibiNaturalFlight var(--duration) linear both}
+                    .chibi-flight-scene:after,.chibi-spark{display:none}
+                    .chibi-avatar{display:block;width:100%;height:100%;overflow:visible;filter:none;transform-origin:50% 65%;animation:chibiNaturalBody var(--duration) linear both}
+                    .chibi-avatar>ellipse:first-of-type{opacity:0}
+                    .chibi-avatar path[fill="url(#cb-skin)"]{fill:#efbd9f}
+                    .chibi-avatar path[fill="url(#cb-shirt)"]{fill:#302e38}
+                    .chibi-flight-scene .chibi-avatar path[d^="M62 294"],.chibi-flight-scene .chibi-avatar path[d^="M81 296"],.chibi-flight-scene .chibi-avatar path[d^="M86 298"]{transform-box:fill-box;transform-origin:50% 0;animation:chibiNaturalThrust var(--duration) linear both}
+                    .chibi-board{box-sizing:border-box;position:absolute;z-index:3;left:76%;bottom:33%;width:94%;padding:12px;border:2px solid #453446;border-radius:10px 14px 12px 8px;background:#fffaf0;box-shadow:3px 5px 0 #251c3030;display:flex;flex-direction:column;align-items:center;gap:8px;transform-origin:0 100%;transform-style:flat;backface-visibility:visible;animation:chibiNaturalCard var(--duration) linear both}
+                    .chibi-board:after{display:none}
+                    .chibi-board-title{font:800 clamp(13px,1.6vw,19px)/1.15 system-ui,sans-serif;color:#453446;letter-spacing:0;text-shadow:none}
+                    .chibi-board-qr{box-sizing:border-box;display:block;width:82%;height:auto;aspect-ratio:1;object-fit:contain;background:white;border:8px solid white;border-radius:0;box-shadow:none}
+                    .chibi-board-link{font:650 clamp(10px,1.1vw,13px)/1.3 system-ui,sans-serif;color:#6c4c65}
+                    .chibi-present-arm{transform-origin:207px 185px;animation:chibiNaturalArm var(--duration) linear both}
+                    @keyframes chibiNaturalFlight{
+                    0%{opacity:0;transform:translate(100vw,22vh) scale(.65)}
+                    2%{opacity:1;transform:translate(70vw,12vh) scale(.72);animation-timing-function:cubic-bezier(.12,.6,.35,1)}
+                    13%{opacity:1;transform:translate(-24vw,-17vh) scale(.88);animation-timing-function:cubic-bezier(.4,0,.3,1)}
+                    23%{transform:translate(-32vw,5vh) scale(.94);animation-timing-function:cubic-bezier(.4,0,.2,1)}
+                    31%{transform:translate(14vw,10vh) scale(1);animation-timing-function:cubic-bezier(.15,.7,.25,1)}
+                    38%{transform:translate(-2vw,-1vh) scale(1)}
+                    42%,79%{opacity:1;transform:translate(0,0) scale(1)}
+                    84%{opacity:1;transform:translate(-3vw,2vh) scale(.97);animation-timing-function:cubic-bezier(.65,0,1,.35)}
+                    96%{opacity:1;transform:translate(105vw,-35vh) scale(.7)}
+                    100%{opacity:0;transform:translate(140vw,-45vh) scale(.6)}}
+                    @keyframes chibiNaturalBody{0%{transform:rotate(-24deg)}12%{transform:rotate(-30deg)}18%{transform:rotate(12deg)}24%{transform:rotate(22deg)}31%{transform:rotate(-17deg)}38%{transform:rotate(5deg)}42%,79%{transform:rotate(0)}83%{transform:translateY(6px) rotate(-8deg) scale(1.02,.97)}89%,100%{transform:rotate(38deg) scale(.97,1.03)}}
+                    @keyframes chibiNaturalCard{
+                    0%,43%{opacity:0;transform:translate(-18%,8%) rotate(-18deg) scale(.04)}
+                    44%{opacity:1;transform:translate(-18%,8%) rotate(-18deg) scale(.04);animation-timing-function:cubic-bezier(.2,.7,.3,1)}
+                    49%{opacity:1;transform:translate(0,0) rotate(-4deg) scale(1.02)}
+                    52%,72%{opacity:1;transform:translate(0,0) rotate(0) scale(1)}
+                    74%{opacity:1;transform:translate(-8%,-6%) rotate(-8deg) scale(.88);animation-timing-function:cubic-bezier(.45,0,.7,.5)}
+                    78%{opacity:1;transform:translate(-18%,8%) rotate(-18deg) scale(.04)}
+                    79%,100%{opacity:0;transform:translate(-18%,8%) rotate(-18deg) scale(.04)}}
+                    @keyframes chibiNaturalArm{0%,42%{transform:rotate(34deg)}45%{transform:rotate(46deg)}50%,72%{transform:rotate(0)}77%{transform:rotate(46deg)}80%,100%{transform:rotate(34deg)}}
+                    @keyframes chibiNaturalThrust{0%,30%{opacity:.85;transform:scaleY(1.1)}38%,79%{opacity:.6;transform:scaleY(.32)}83%{opacity:.8;transform:scaleY(.6)}88%,100%{opacity:1;transform:scaleY(1.8)}}
+                    @media(max-width:620px){.chibi-flight-scene{width:clamp(150px,34vw,210px);height:auto}.chibi-board{padding:8px;gap:5px;border-width:2px;border-radius:9px}.chibi-board-qr{border-width:5px}.chibi-board-link{font-size:10px}}
+                    @media(prefers-reduced-motion:reduce){.chibi-flight-scene,.chibi-avatar,.chibi-board,.chibi-present-arm{animation:none!important;transform:none;opacity:1}.chibi-flight-scene .chibi-avatar path{animation:none!important}}
                 </style>
                 <div class="chibi-flight-scene">
                     <span class="chibi-spark" style="left:9%;top:17%;color:#fde047">✦</span>
@@ -1978,9 +2015,11 @@
                         <!-- left arm holding the board -->
                         <path d="M70 179 Q55 196 52 225 L67 236 Q86 216 95 195" fill="url(#cb-skin)" stroke="#cc9278" stroke-width="4"/>
                         <path d="M53 224 Q43 226 43 237 Q45 248 60 247 L76 239 69 229Z" fill="url(#cb-skin)" stroke="#cc9278" stroke-width="3"/>
-                        <!-- right arm and tiny hand -->
+                        <!-- Articulated arm follows the card to the pocket. -->
+                        <g class="chibi-present-arm">
                         <path d="M207 180 Q226 192 236 218 L221 230 Q201 214 191 195" fill="url(#cb-skin)" stroke="#cc9278" stroke-width="4"/>
                         <path d="M230 218 Q245 211 250 221 Q252 234 237 239 L221 232Z" fill="url(#cb-skin)" stroke="#cc9278" stroke-width="3"/>
+                        </g>
                         <!-- sling bag -->
                         <path d="M91 153 Q146 198 202 255" fill="none" stroke="#17191e" stroke-width="14" stroke-linecap="round"/>
                         <path d="M151 213 Q173 201 193 217 L210 255 Q214 269 199 276 L167 287 Q154 289 148 277 L137 239 Q134 224 151 213Z" fill="#20232a" stroke="#111318" stroke-width="4"/>
@@ -2021,6 +2060,7 @@
                         <img class="chibi-board-qr" src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&amp;margin=2&amp;data=https%3A%2F%2Ft.me%2FDell11q" alt="QR-код Telegram-канала Dell11q">
                         <div class="chibi-board-link">✈ t.me/Dell11q</div>
                     </div>
+                    <svg style="position:absolute;left:0;top:0;width:100%;height:100%;z-index:4;pointer-events:none" viewBox="0 0 300 360" aria-hidden="true"><path d="M142 240Q169 230 201 239L209 255Q214 269 199 276L168 286Q154 289 148 277Z" fill="#20232a" stroke="#11131a" stroke-width="3"/><path d="M142 240Q169 230 201 239" fill="none" stroke="#70636e" stroke-width="2.5" stroke-linecap="round"/></svg>
                 </div>`;
             } else if (kind === 'burger-intro') {
                 title = 'инта — бургер-стикер';
