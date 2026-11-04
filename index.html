@@ -338,6 +338,19 @@
 
                     <!-- TAB 4: WIDGETS -->
                     <div id="tab-content-links" class="space-y-4 hidden">
+                        <div class="bg-slate-950 border border-sky-500/40 rounded-xl p-3 space-y-2">
+                            <label for="shared-timer-minutes" class="block text-sm font-bold text-sky-300">Общий таймер для OBS</label>
+                            <label class="block text-xs text-slate-300">Длительность в минутах
+                                <input id="shared-timer-minutes" type="number" min="0.1" max="1440" step="0.1" value="5" class="block w-full mt-1 bg-slate-900 border border-slate-700 rounded-lg p-2">
+                            </label>
+                            <div class="flex flex-wrap gap-2">
+                                <button onclick="controlSharedTimer('start')" class="bg-sky-600 rounded-lg px-3 py-2 text-xs">Старт / продолжить</button>
+                                <button onclick="controlSharedTimer('pause')" class="bg-slate-700 rounded-lg px-3 py-2 text-xs">Пауза</button>
+                                <button onclick="controlSharedTimer('reset')" class="bg-slate-700 rounded-lg px-3 py-2 text-xs">Задать / сбросить</button>
+                                <button onclick="removeOverlayItem('shared_stream_timer')" class="bg-slate-700 rounded-lg px-3 py-2 text-xs">Убрать</button>
+                            </div>
+                            <p class="text-xs text-slate-400">Кнопки управляют одним таймером в пульте и OBS. Для новой длительности нажми «Задать / сбросить».</p>
+                        </div>
                         <label for="website-url" class="block text-xs font-semibold text-slate-300">Адрес сайта или виджета</label>
                         <input id="website-url" type="url" placeholder="https://example.com/widget" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm">
                         <div class="flex gap-3">
@@ -356,6 +369,11 @@
                             <span>➕ Создать новый виджет (Конструктор)</span>
                         </button>
 
+                        <div class="bg-slate-950 border border-amber-500/40 rounded-xl p-3 space-y-2">
+                            <label for="repair-sign-text" class="block text-sm font-bold text-amber-300">🏗️ Ремонт репутации</label>
+                            <input id="repair-sign-text" maxlength="80" value="И так сойдёт" placeholder="Фраза на готовой табличке" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm">
+                            <button onclick="triggerReputationRepair()" class="w-full bg-amber-600 hover:bg-amber-500 rounded-lg p-2 text-sm font-bold">Вызвать ремонтную бригаду</button>
+                        </div>
                         <div id="custom-widgets-container" class="space-y-2"></div>
 
                         <button onclick="sendWidget('burger-intro')" class="w-full flex items-center justify-between bg-gradient-to-r from-amber-500 via-orange-600 to-red-700 hover:brightness-110 p-3.5 rounded-xl text-xs font-semibold text-white transition shadow-lg cursor-pointer group">
@@ -3677,6 +3695,8 @@
                 contentHtml = `<iframe src="${escapeHtml(playerUrl.href)}" class="w-[500px] h-[281px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
             } else if (item.type === 'tiktok') {
                 contentHtml = `<iframe src="${escapeHtml(item.url)}" class="w-[325px] h-[578px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+            } else if (item.type === 'shared-timer') {
+                contentHtml = '<div data-shared-timer role="timer" style="min-width:240px;padding:18px 28px;border:2px solid #38bdf8;border-radius:18px;background:#0f172aeb;color:white;text-align:center;font:700 64px/1.1 system-ui;font-variant-numeric:tabular-nums">00:00</div>';
             } else if (item.type === 'website') {
                 let websiteUrl;
                 try {
@@ -3701,6 +3721,22 @@
 
             node.innerHTML = contentHtml;
             if (item.type === 'website') setupWebsiteControls(node, item, isInteractive);
+            if (item.type === 'shared-timer') {
+                const display = node.querySelector('[data-shared-timer]');
+                const tick = () => {
+                    const current = activeOverlays.find(candidate => candidate.id === item.id) || item;
+                    const state = current.content || {};
+                    const remaining = state.endsAt ? Math.max(0, state.endsAt - Date.now()) : Math.max(0, Number(state.remainingMs) || 0);
+                    const seconds = Math.ceil(remaining / 1000);
+                    display.textContent = String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0');
+                    display.style.borderColor = seconds === 0 ? '#fbbf24' : '#38bdf8';
+                };
+                tick();
+                const timer = window.setInterval(() => {
+                    if (!node.isConnected) return window.clearInterval(timer);
+                    tick();
+                }, 200);
+            }
             if (item.type === 'youtube' || item.type === 'tiktok') {
                 const frame = node.querySelector('iframe');
                 frame.addEventListener('load', () => {
@@ -3872,6 +3908,79 @@
                 renderOverlaysSmart();
                 showToast('Не удалось отправить анимацию в OBS', 'warning');
             });
+        }
+
+        function controlSharedTimer(action) {
+            if (!['start', 'pause', 'reset'].includes(action)) return;
+            const minutes = Number(document.getElementById('shared-timer-minutes').value);
+            if (!Number.isFinite(minutes) || minutes < 0.1 || minutes > 1440) {
+                return showToast('Укажите длительность от 0,1 до 1440 минут', 'warning');
+            }
+            const durationMs = Math.round(minutes * 60000);
+            let item = activeOverlays.find(candidate => candidate.id === 'shared_stream_timer');
+            if (!item && action === 'pause') return;
+            if (!item) {
+                item = { id: 'shared_stream_timer', type: 'shared-timer', title: 'Общий таймер',
+                    content: { durationMs, remainingMs: durationMs, endsAt: null },
+                    anim: 'anim-none', scale: 1, x: 50, y: 25, hidden: false };
+                activeOverlays.push(item);
+            }
+            const state = item.content || {};
+            const now = Date.now();
+            const remainingMs = state.endsAt ? Math.max(0, state.endsAt - now) : Math.max(0, Number(state.remainingMs) || 0);
+            if (action === 'reset') {
+                item.content = { durationMs, remainingMs: durationMs, endsAt: null };
+            } else if (action === 'pause') {
+                item.content = { ...state, remainingMs, endsAt: null };
+            } else {
+                const resumeMs = remainingMs > 0 ? remainingMs : (state.durationMs || durationMs);
+                item.content = { ...state, remainingMs: resumeMs, endsAt: state.endsAt && remainingMs > 0 ? state.endsAt : now + resumeMs };
+                item.hidden = false;
+            }
+            renderOverlays();
+            saveAndBroadcast();
+        }
+
+        function triggerReputationRepair() {
+            const phrase = document.getElementById('repair-sign-text').value.trim().slice(0, 80);
+            if (!phrase) return showToast('Напишите фразу на табличке', 'warning');
+            const worker = (side) => `<svg class="rep-worker rep-worker-${side}" viewBox="0 0 140 220" aria-hidden="true">
+                <g class="rep-legs" fill="#334155" stroke="#172033" stroke-width="5"><path d="M48 140L44 195H62L73 146Z"/><path d="M77 142L85 195H103L98 140Z"/></g>
+                <path d="M37 194H66V207H29Q25 198 37 194M84 194H108L117 207H83Z" fill="#172033"/>
+                <path d="M46 82Q70 72 95 85L106 147H34Z" fill="#f59e0b" stroke="#78350f" stroke-width="4"/>
+                <path d="M54 84L61 145M83 83L89 145" stroke="#fef3c7" stroke-width="8"/>
+                <path d="M39 125H103" stroke="#fef3c7" stroke-width="7"/>
+                <ellipse cx="70" cy="56" rx="27" ry="30" fill="#edb18a"/>
+                <path d="M38 47Q39 16 70 16Q100 16 102 47Z" fill="#fbbf24" stroke="#92400e" stroke-width="4"/>
+                <path d="M31 48H110M70 17V39" stroke="#92400e" stroke-width="6" stroke-linecap="round"/>
+                <circle cx="61" cy="58" r="3" fill="#172033"/><circle cx="80" cy="58" r="3" fill="#172033"/>
+                <path d="M62 72Q70 77 79 71" fill="none" stroke="#92400e" stroke-width="3"/>
+                <path d="M43 95L26 132 43 148" fill="none" stroke="#edb18a" stroke-width="15" stroke-linecap="round"/>
+                <g class="rep-hammer"><path d="M94 98L119 115 112 80" fill="none" stroke="#edb18a" stroke-width="15" stroke-linecap="round"/><path d="M112 88V46" stroke="#92400e" stroke-width="8"/><path d="M95 38H131V54H95Z" fill="#94a3b8" stroke="#334155" stroke-width="3"/></g>
+            </svg>`;
+            const html = `<style>
+                .rep-scene{position:relative;width:1920px;height:1080px;overflow:hidden;pointer-events:none;font-family:system-ui,sans-serif}
+                .rep-crew{position:absolute;left:50%;top:57%;width:760px;height:340px;margin:-170px 0 0 -380px;animation:repVisit 9s both}
+                .rep-sign{position:absolute;left:170px;top:42px;width:420px;height:150px;border:6px solid #78350f;border-radius:10px;box-shadow:0 12px 24px #0005;background:#fef3c7;color:#422006;display:grid;place-items:center;text-align:center;padding:18px;box-sizing:border-box;transform-origin:50% 90%;animation:repRattle 9s both}
+                .rep-sign:before,.rep-sign:after{content:"";position:absolute;top:100%;height:100px;width:13px;background:#78350f;z-index:-1}
+                .rep-sign:before{left:55px}.rep-sign:after{right:55px}
+                .rep-before,.rep-after{grid-area:1/1;font-size:30px;line-height:1.15;font-weight:900;overflow-wrap:anywhere;max-width:100%}
+                .rep-before{animation:repOld 9s both}.rep-before small{display:block;font-size:16px;margin-top:10px;color:#92400e}
+                .rep-after{animation:repNew 9s both}
+                .rep-worker{position:absolute;bottom:0;width:145px;height:228px;filter:drop-shadow(0 8px 5px #0004)}
+                .rep-worker-left{left:12px}.rep-worker-right{right:12px;transform:scaleX(-1)}
+                .rep-hammer{transform-origin:95px 98px;animation:repHammer .42s 1.7s 9 alternate ease-in-out}
+                .rep-barrier{position:absolute;left:100px;bottom:3px;width:560px;height:40px;border:4px solid #78350f;background:repeating-linear-gradient(130deg,#fbbf24 0 30px,#292524 30px 60px);box-sizing:border-box;animation:repBarrier 9s both}
+                .rep-caption{position:absolute;top:-9px;left:0;right:0;text-align:center;font-size:18px;font-weight:800;color:#fff;text-shadow:0 2px 4px #000;animation:repOld 9s both}
+                @keyframes repVisit{0%{opacity:0;transform:translateX(-125vw)}17%{opacity:1;transform:translateX(0)}86%{opacity:1;transform:translateX(0)}100%{opacity:0;transform:translateX(125vw)}}
+                @keyframes repHammer{from{transform:rotate(-28deg)}to{transform:rotate(12deg)}}
+                @keyframes repRattle{0%,20%{transform:rotate(-5deg)}25%,35%,45%,55%{transform:rotate(3deg)}30%,40%,50%{transform:rotate(-3deg)}62%,100%{transform:rotate(0)}}
+                @keyframes repOld{0%,57%{opacity:1}62%,100%{opacity:0}}
+                @keyframes repNew{0%,60%{opacity:0;transform:scale(.85)}66%,100%{opacity:1;transform:scale(1)}}
+                @keyframes repBarrier{0%,63%{opacity:1;transform:translateY(0)}70%,100%{opacity:0;transform:translateY(65px)}}
+                @media(prefers-reduced-motion:reduce){.rep-crew,.rep-sign,.rep-before,.rep-after,.rep-barrier,.rep-caption,.rep-hammer{animation:none!important}.rep-before,.rep-caption,.rep-barrier{display:none}.rep-after{opacity:1}}
+            </style><div class="rep-scene"><div class="rep-crew"><div class="rep-caption">Ремонтная бригада модерации</div><div class="rep-sign"><div class="rep-before">Репутация стримера<small>Ведутся восстановительные работы</small></div><div class="rep-after">${escapeHtml(phrase)}</div></div>${worker('left')}${worker('right')}<div class="rep-barrier"></div></div></div>`;
+            sendTimedInteraction('Ремонт репутации: ' + phrase, html, 9500);
         }
 
         function triggerStreamerAward(title) {
