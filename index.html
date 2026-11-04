@@ -2124,6 +2124,16 @@
                     applyOverlayPlayback(node, current);
                 };
                 player.addEventListener(item.type === 'video' ? 'loadedmetadata' : 'load', ready);
+                if (item.type === 'youtube') {
+                    let attempts = 0;
+                    const handshake = setInterval(() => {
+                        if (!player.isConnected || player.dataset.playbackReady || ++attempts > 40) {
+                            clearInterval(handshake);
+                            return;
+                        }
+                        player.contentWindow?.postMessage(JSON.stringify({ event: 'listening', id: item.id }), new URL(player.src).origin);
+                    }, 500);
+                }
                 if (item.type === 'video') player.addEventListener('error', () => {
                     videoTelemetry.set(item.id, { error: 'Не удалось загрузить видео' });
                 });
@@ -2131,6 +2141,7 @@
             const state = item.playback;
             if (!state || player.dataset.playbackCommand === state.commandId) return;
             if (item.type === 'video' && player.readyState < 1) return;
+            if (item.type === 'youtube' && !player.dataset.playbackReady) return;
             const duration = item.type === 'video' ? player.duration : videoTelemetry.get(item.id)?.duration;
             let position = playbackPosition(state);
             if (Number.isFinite(duration) && duration > 0) {
@@ -2181,6 +2192,7 @@
                 const frame = Array.from(frames).find(candidate => candidate.contentWindow === event.source);
                 if (!frame) continue;
                 if (data?.event === 'onReady') {
+                    frame.dataset.playbackReady = 'true';
                     delete frame.dataset.playbackCommand;
                     applyOverlayPlayback(frame.parentElement, item);
                 }
@@ -3802,14 +3814,24 @@
             const { x, y, scale, stretchX, stretchY, anim, volume, playback, url, html, ...contentState } = item;
             if (url !== undefined) contentState.mediaUrl = url;
             if (html !== undefined) contentState.widgetHtml = html;
-            return JSON.stringify(contentState);
+            // Firebase may reorder object keys; that must not recreate a running player.
+            return JSON.stringify(contentState, (_key, value) =>
+                value && typeof value === 'object' && !Array.isArray(value)
+                    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
+                    : value);
         }
 
         function isSameMediaSource(node, item) {
             if (!node || !item.url) return false;
             const tagName = item.type === 'image' ? 'img' : (item.type === 'video' ? 'video' : (item.type === 'youtube' || item.type === 'tiktok' ? 'iframe' : ''));
             const mediaNode = tagName ? node.querySelector(tagName) : null;
-            return Boolean(mediaNode && mediaNode.getAttribute('src') === item.url);
+            if (!mediaNode) return false;
+            if (item.type === 'youtube') {
+                const expected = new URL(item.url);
+                expected.searchParams.set('enablejsapi', '1');
+                return mediaNode.getAttribute('src') === expected.href;
+            }
+            return mediaNode.getAttribute('src') === item.url;
         }
 
         function renderOverlays() {
