@@ -441,21 +441,6 @@
                             <h3 class="text-sm font-bold text-white">Пёсик модерации</h3>
                             <p class="mt-1 text-[11px] leading-relaxed text-slate-400">Зови пёсика за поддержкой, снеком или отправляй патрулировать чат. Иногда он выскакивает к зрителям, облизывает экран и звонко гавкает!</p>
                         </div>
-                        <div class="rounded-xl border border-amber-500/20 bg-slate-900/70 p-3 space-y-3">
-                            <label class="flex items-center justify-between gap-3 cursor-pointer">
-                                <span><span class="block text-xs font-bold text-white">Пёсик на экране</span><span class="block mt-0.5 text-[10px] text-slate-400">Включи, чтобы он прибежал и сел в уголке</span></span>
-                                <input id="dog-presence-toggle" type="checkbox" onchange="toggleStreamDogPresence(this.checked)" class="h-5 w-5 accent-amber-400 cursor-pointer">
-                            </label>
-                            <label class="block text-[11px] font-semibold text-slate-400">Где сидит пёсик
-                                <select id="dog-corner" onchange="moveStreamDog(this.value)" class="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-slate-200">
-                                    <option value="bottom-right">Внизу справа</option>
-                                    <option value="bottom-left">Внизу слева</option>
-                                    <option value="top-right">Вверху справа</option>
-                                    <option value="top-left">Вверху слева</option>
-                                </select>
-                            </label>
-                            <div id="dog-presence-status" class="text-[10px] text-slate-400">Пёсик пока не вышел на экран.</div>
-                        </div>
                         <label class="block text-[11px] font-semibold text-slate-400">Звук пёсика
                             <select id="dog-sound" onchange="saveInteractiveSoundChoice('dog-sound','obs_dog_sound')" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200"></select>
                         </label>
@@ -3652,7 +3637,6 @@
             const soundHint = customSoundsList.length ? 'Выбери звук из списка «Звуки».' : 'Сначала добавь звук во вкладке «Звуки», затем выбери его здесь.';
             if (awardHint) awardHint.textContent = soundHint;
             if (dogHint) dogHint.textContent = soundHint;
-            syncDogPresenceControls();
         }
 
         function streamDogSvg() {
@@ -3728,7 +3712,7 @@
             if (soundId) playCustomSound(soundId);
         }
 
-        const DOG_PET_ID = 'moderation_dog_pet';
+        /* const DOG_PET_ID = 'moderation_dog_pet';
         const DOG_CORNERS = {
             'bottom-right': { x: 92, y: 89 },
             'bottom-left': { x: 8, y: 89 },
@@ -3838,6 +3822,7 @@
             syncDogPresenceControls();
         }
 
+        */
         function callStreamDog(action) {
             const rareLick = Math.random() < 0.08;
             const rareLick = Math.random() < 0.08;
