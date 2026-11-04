@@ -3457,7 +3457,8 @@
             node.dataset.id = item.id;
             node.dataset.renderSignature = getOverlayRenderSignature(item);
             const animClass = animate && item.anim !== 'anim-none' ? (item.anim || 'anim-fade') : '';
-            node.className = `absolute flex items-center justify-center ${animClass} ${isInteractive ? 'draggable-item pointer-events-auto cursor-move' : 'pointer-events-none'}`;
+            const isPointerInteractive = isInteractive && item.type !== 'ephemeral-widget';
+            node.className = `absolute flex items-center justify-center ${animClass} ${isPointerInteractive ? 'draggable-item pointer-events-auto cursor-move' : 'pointer-events-none'}`;
             if (animClass) {
                 node.addEventListener('animationend', event => {
                     if (event.target === node) node.classList.remove(animClass);
@@ -3469,7 +3470,7 @@
             applyOverlayTransform(node, item);
             if (!isInteractive) node.style.transition = 'left 100ms cubic-bezier(0.2, 0.8, 0.2, 1), top 100ms cubic-bezier(0.2, 0.8, 0.2, 1)';
 
-            if (isInteractive) {
+            if (isPointerInteractive) {
                 node.onpointerdown = (e) => startDrag(e, item.id);
             }
 
@@ -3498,7 +3499,7 @@
             }
 
             node.innerHTML = contentHtml;
-            if (item.type === 'ephemeral-widget' && !isInteractive) {
+            if (item.type === 'ephemeral-widget') {
                 window.setTimeout(() => {
                     if (node.isConnected) removeOverlayItem(item.id);
                 }, Math.max(1000, Math.min(30000, Number(item.durationMs) || 8000)));
@@ -3538,7 +3539,7 @@
                 audio.load();
                 if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) startPlayback();
             }
-            if (isInteractive) {
+            if (isPointerInteractive) {
                 [
                     ['horizontal', 'right-0 top-1/2 -translate-y-1/2 cursor-ew-resize'],
                     ['vertical', 'bottom-0 left-1/2 -translate-x-1/2 cursor-ns-resize']
