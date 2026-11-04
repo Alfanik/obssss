@@ -207,6 +207,9 @@
                         <button id="tab-btn-video" onclick="switchControlTab('video')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-video text-purple-400"></i> Видео
                         </button>
+                        <button id="tab-btn-links" onclick="switchControlTab('links')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
+                            <i class="fa-solid fa-link text-sky-400"></i> Ссылки
+                        </button>
                         <button id="tab-btn-widgets" onclick="switchControlTab('widgets')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-shapes text-amber-400"></i> Виджеты
                         </button>
@@ -334,6 +337,17 @@
                     </div>
 
                     <!-- TAB 4: WIDGETS -->
+                    <div id="tab-content-links" class="space-y-4 hidden">
+                        <label for="website-url" class="block text-xs font-semibold text-slate-300">Адрес сайта или виджета</label>
+                        <input id="website-url" type="url" placeholder="https://example.com/widget" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm">
+                        <div class="flex gap-3">
+                            <label class="flex-1 text-xs text-slate-300">Ширина, px<input id="website-width" type="number" min="200" max="1920" value="640" class="block w-full mt-1 bg-slate-950 border border-slate-700 rounded-lg p-2"></label>
+                            <label class="flex-1 text-xs text-slate-300">Высота, px<input id="website-height" type="number" min="100" max="1080" value="400" class="block w-full mt-1 bg-slate-950 border border-slate-700 rounded-lg p-2"></label>
+                        </div>
+                        <button onclick="sendWebsiteOverlay()" class="w-full bg-sky-600 hover:bg-sky-500 rounded-xl p-3 text-sm font-bold cursor-pointer">Показать в оверлее</button>
+                        <p class="text-xs text-slate-400">В предпросмотре нажми «Управлять сайтом», чтобы кликать и вводить текст. Для перемещения верни режим «Перемещать».</p>
+                        <p class="text-xs text-amber-300">Некоторые сайты запрещают встраивание. Используй специальные ссылки для OBS/виджетов. Клики и ввод действуют только в пульте: общий чат или таймер должен синхронизироваться самим сервисом. Окно программы по ссылке не захватывается.</p>
+                    </div>
                     <div id="tab-content-widgets" class="space-y-3 hidden">
                         <label class="block text-xs font-semibold text-slate-300 mb-1">Готовые виджеты для стрима</label>
                         
@@ -1289,7 +1303,8 @@
                 title: item.title,
                 customWidgetId: item.customWidgetId,
                 volume: item.volume,
-                durationMs: item.durationMs
+                durationMs: item.durationMs,
+                crop: item.crop
             };
             if (typeof cleanItem.url === 'string' && cleanItem.url.startsWith('data:')) {
                 cleanItem.assetKey = item.assetKey || item.id;
@@ -3662,6 +3677,22 @@
                 contentHtml = `<iframe src="${escapeHtml(playerUrl.href)}" class="w-[500px] h-[281px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
             } else if (item.type === 'tiktok') {
                 contentHtml = `<iframe src="${escapeHtml(item.url)}" class="w-[325px] h-[578px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+            } else if (item.type === 'website') {
+                let websiteUrl;
+                try {
+                    websiteUrl = new URL(item.url);
+                    if (!['http:', 'https:'].includes(websiteUrl.protocol)) throw new Error();
+                } catch {
+                    contentHtml = '<div>Некорректная ссылка сайта</div>';
+                }
+                if (websiteUrl && ['http:', 'https:'].includes(websiteUrl.protocol)) {
+                    const width = Math.max(200, Math.min(1920, parseInt(item.width, 10) || 640));
+                    const height = Math.max(100, Math.min(1080, parseInt(item.height, 10) || 400));
+                    contentHtml = `<div style="position:relative;width:${width}px;height:${height}px">
+                        ${isInteractive ? '<button type="button" data-website-control style="position:absolute;left:0;top:-32px;height:28px;padding:3px 10px;background:#0284c7;color:white;border-radius:6px;font:12px system-ui;pointer-events:auto;white-space:nowrap">Управлять сайтом</button>' : ''}
+                        <iframe title="${escapeHtml(item.title || 'Сайт')}" src="${escapeHtml(websiteUrl.href)}" sandbox="allow-scripts allow-same-origin allow-forms" allow="autoplay; fullscreen" style="display:block;width:100%;height:100%;border:0;background:transparent;pointer-events:none"></iframe>
+                    </div>`;
+                }
             } else if (item.type === 'widget') {
                 contentHtml = item.url ? item.html.split('__WIDGET_MEDIA__').join(escapeHtml(item.url)) : item.html;
             } else if (item.type === 'ephemeral-widget') {
@@ -3669,6 +3700,7 @@
             }
 
             node.innerHTML = contentHtml;
+            if (item.type === 'website') setupWebsiteControls(node, item, isInteractive);
             if (item.type === 'youtube' || item.type === 'tiktok') {
                 const frame = node.querySelector('iframe');
                 frame.addEventListener('load', () => {
@@ -3729,7 +3761,14 @@
                     handle.type = 'button';
                     handle.className = `resize-handle absolute z-10 w-3 h-8 rounded-full bg-indigo-500 border border-white/80 shadow ${position}`;
                     handle.title = direction === 'horizontal' ? 'Растянуть по ширине' : 'Растянуть по высоте';
-                    handle.onpointerdown = event => startOverlayResize(item.id, direction, event);
+                    handle.onpointerdown = event => {
+                        if (event.altKey && item.type === 'website') {
+                            const edge = direction === 'horizontal' ? 'right' : 'bottom';
+                            node.querySelector('[data-website-crop-edge="' + edge + '"]')?.onpointerdown(event);
+                            return;
+                        }
+                        startOverlayResize(item.id, direction, event);
+                    };
                     node.appendChild(handle);
                 });
             }
@@ -3853,8 +3892,145 @@
             if (soundId) playCustomSound(soundId);
         }
 
+        function setupWebsiteControls(node, item, isInteractive) {
+            const frame = node.querySelector('iframe');
+            if (!frame) return;
+            const root = frame.parentElement;
+            const width = Math.max(200, Math.min(1920, parseInt(item.width, 10) || 640));
+            const height = Math.max(100, Math.min(1080, parseInt(item.height, 10) || 400));
+            const crop = {};
+            for (const edge of ['left', 'right', 'top', 'bottom']) {
+                crop[edge] = Math.max(0, Number(item.crop?.[edge]) || 0);
+            }
+            crop.left = Math.min(crop.left, width - 80);
+            crop.right = Math.min(crop.right, width - crop.left - 80);
+            crop.top = Math.min(crop.top, height - 60);
+            crop.bottom = Math.min(crop.bottom, height - crop.top - 60);
+            const viewport = document.createElement('div');
+            viewport.style.cssText = 'position:relative;overflow:hidden;width:100%;height:100%';
+            root.insertBefore(viewport, frame);
+            viewport.appendChild(frame);
+            frame.style.position = 'absolute';
+            frame.style.width = width + 'px';
+            frame.style.height = height + 'px';
+            const paint = () => {
+                root.style.width = (width - crop.left - crop.right) + 'px';
+                root.style.height = (height - crop.top - crop.bottom) + 'px';
+                frame.style.left = -crop.left + 'px';
+                frame.style.top = -crop.top + 'px';
+            };
+            paint();
+            if (!isInteractive) return;
+            const button = root.querySelector('[data-website-control]');
+            button.onpointerdown = event => event.stopPropagation();
+            button.onclick = event => {
+                event.stopPropagation();
+                const interacting = frame.style.pointerEvents !== 'auto';
+                frame.style.pointerEvents = interacting ? 'auto' : 'none';
+                button.textContent = interacting ? 'Перемещать / обрезать' : 'Управлять сайтом';
+                node.style.cursor = interacting ? 'default' : 'move';
+            };
+            for (const edge of ['left', 'right', 'top', 'bottom']) {
+                const handle = document.createElement('div');
+                const horizontal = edge === 'left' || edge === 'right';
+                handle.dataset.websiteCropEdge = edge;
+                handle.title = 'Alt + перетаскивание — обрезать край';
+                handle.style.cssText = 'position:absolute;z-index:5;pointer-events:auto;background:rgba(56,189,248,.35);';
+                handle.style.cursor = horizontal ? 'ew-resize' : 'ns-resize';
+                if (horizontal) {
+                    handle.style.cssText += 'top:0;bottom:0;width:6px;' + edge + ':-3px';
+                } else {
+                    handle.style.cssText += 'left:0;right:0;height:6px;' + edge + ':-3px';
+                }
+                handle.onpointerdown = event => {
+                    if (!event.altKey || event.button !== 0) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const current = activeOverlays.find(candidate => candidate.id === item.id);
+                    if (!current) return;
+                    const initial = { ...crop };
+                    const rect = root.getBoundingClientRect();
+                    const scaleX = rect.width / (width - crop.left - crop.right);
+                    const scaleY = rect.height / (height - crop.top - crop.bottom);
+                    const startX = event.clientX, startY = event.clientY;
+                    const pointerId = event.pointerId;
+                    handle.setPointerCapture(pointerId);
+                    isResizingOverlay = true;
+                    const move = next => {
+                        if (next.pointerId !== pointerId) return;
+                        const delta = horizontal ? (next.clientX - startX) / scaleX : (next.clientY - startY) / scaleY;
+                        const opposite = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' }[edge];
+                        const limit = (horizontal ? width - 80 : height - 60) - crop[opposite];
+                        crop[edge] = Math.max(0, Math.min(limit, initial[edge] + (edge === 'left' || edge === 'top' ? delta : -delta)));
+                        current.crop = { ...crop };
+                        paint();
+                    };
+                    const finish = next => {
+                        if (next.pointerId !== pointerId) return;
+                        handle.removeEventListener('pointermove', move);
+                        handle.removeEventListener('pointerup', finish);
+                        handle.removeEventListener('pointercancel', finish);
+                        if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+                        isResizingOverlay = false;
+                        // Keep the live iframe instead of reloading it after cropping.
+                        node.dataset.renderSignature = getOverlayRenderSignature(current);
+                        saveAndBroadcast();
+                    };
+                    handle.addEventListener('pointermove', move);
+                    handle.addEventListener('pointerup', finish);
+                    handle.addEventListener('pointercancel', finish);
+                };
+                root.appendChild(handle);
+            }
+            const reset = document.createElement('button');
+            reset.type = 'button';
+            reset.textContent = 'Сбросить обрезку';
+            reset.style.cssText = 'position:absolute;left:0;bottom:-30px;height:26px;padding:3px 10px;background:#334155;color:white;border-radius:6px;font:12px system-ui;pointer-events:auto';
+            reset.onpointerdown = event => event.stopPropagation();
+            reset.onclick = event => {
+                event.stopPropagation();
+                const current = activeOverlays.find(candidate => candidate.id === item.id);
+                if (!current) return;
+                for (const edge of Object.keys(crop)) crop[edge] = 0;
+                current.crop = { ...crop };
+                paint();
+                node.dataset.renderSignature = getOverlayRenderSignature(current);
+                saveAndBroadcast();
+            };
+            root.appendChild(reset);
+        }
+
+        function sendWebsiteOverlay() {
+            const input = document.getElementById('website-url');
+            let url;
+            try {
+                url = new URL(input.value.trim());
+                if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
+                if (location.protocol === 'https:' && url.protocol !== 'https:') {
+                    return showToast('Для этой страницы нужна HTTPS-ссылка', 'warning');
+                }
+                if (url.origin === location.origin && url.pathname === location.pathname) {
+                    return showToast('Нельзя встроить сам пульт внутрь оверлея', 'warning');
+                }
+            } catch {
+                return showToast('Вставьте полную ссылку: https://…', 'warning');
+            }
+            const dimension = (id, fallback, min, max) => {
+                const value = Number(document.getElementById(id).value);
+                return Number.isFinite(value) && value > 0 ? Math.round(Math.max(min, Math.min(max, value))) : fallback;
+            };
+            activeOverlays.push({
+                id: 'site_' + Date.now(), type: 'website', title: 'Сайт: ' + url.hostname,
+                url: url.href, width: dimension('website-width', 640, 200, 1920) + 'px',
+                height: dimension('website-height', 400, 100, 1080) + 'px',
+                anim: 'anim-none', scale: 1, x: 50, y: 50, hidden: false
+            });
+            renderOverlays();
+            saveAndBroadcast();
+        }
+
         function switchControlTab(tab) {
-            ['text', 'image', 'video', 'widgets', 'awards', 'sounds'].forEach(t => {
+            ['text', 'image', 'video', 'links', 'widgets', 'awards', 'sounds'].forEach(t => {
                 const btn = document.getElementById(`tab-btn-${t}`);
                 const content = document.getElementById(`tab-content-${t}`);
                 if (t === tab) {
