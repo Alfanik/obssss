@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OBS Live Overlay Studio Pro</title>
+    <title>Dell-пульт · Dell11q</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -75,18 +75,74 @@
         .resize-handle { opacity: 0; transition: opacity 120ms ease; }
         .draggable-item:hover .resize-handle { opacity: 1; }
         #operator-overlay-canvas iframe { pointer-events: none; }
+        /* Dell control shell. Do not recolor rendered overlay content. */
+        #moderator-login-gate{background:#080809f5}
+        #moderator-login-form{background:#141416;border-color:#3c2c38;border-radius:16px;box-shadow:0 20px 80px #0008}
+        #moderator-login-form input{background:#0c0b0e;border-color:#493342;color:#f4f1f2}
+        #moderator-login-form input:focus-visible{outline:2px solid #ff8096;outline-offset:2px}
+        #moderator-login-form .bg-indigo-600,#moderator-login-submit{background:#ef354e}
+        #moderator-login-submit:hover{background:#ff4961}
+        #moderator-login-form h2:before{content:"Dell-пульт";display:block;color:#ff8fa4;font-size:13px;margin-bottom:6px}
+        body:not(.obs-overlay-mode){background:#080809;color:#f4f1f2;font-family:"Segoe UI",Inter,Arial,sans-serif}
+        body:not(.obs-overlay-mode) #main-header{background:#080809;border-color:#29252d;box-shadow:none;padding:22px 30px;gap:20px;position:relative}
+        .dell-mark{display:flex;align-items:center;gap:4px;width:40px;height:45px;transform:skew(-15deg);overflow:hidden;flex:none}
+        .dell-mark i{display:block;width:10px;height:31px;background:#eee9ec}
+        .dell-mark i:nth-child(2){height:43px;background:#ef354e}
+        .dell-mark i:last-child{height:23px;align-self:flex-end;margin-bottom:7px}
+        .dell-title{font-size:28px;font-weight:850;letter-spacing:-1.1px;line-height:1.1}
+        .dell-subtitle{font-size:11px;color:#aaa5ae;margin-top:6px}
+        body:not(.obs-overlay-mode) #view-operator{max-width:1600px;padding:26px 30px 40px;gap:24px;align-items:start}
+        #view-operator>div{min-width:0}
+        #view-operator>div:first-child>section{order:0;background:transparent;border:0;padding:0 0 18px;border-bottom:1px solid #2b292e;border-radius:0;box-shadow:none}
+        #view-operator>div:first-child>div{order:1;background:#141416;border:1px solid #2b292e;border-radius:14px;padding:22px;box-shadow:none}
+        #view-operator>div:last-child>div{background:#141416;border:1px solid #2b292e;border-radius:14px;padding:22px;box-shadow:none}
+        #view-operator h2{font-size:16px;font-weight:650;text-transform:none;letter-spacing:-.2px}
+        #view-operator #active-elements-list{max-height:62vh;min-height:280px;padding-top:8px}
+        #view-operator #active-elements-list>div{box-shadow:none}
+        #view-operator #empty-active-state{border-color:#443641;background:#100d11}
+        #view-operator .dell-layout-editor{order:2;background:transparent;border:1px solid #352b35;border-radius:12px;padding:15px}
+        .dell-layout-editor summary{cursor:pointer;display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:13px;font-weight:600;list-style:none}
+        .dell-layout-editor summary::-webkit-details-marker{display:none}
+        .dell-layout-editor summary>span:first-child{display:flex;align-items:center;gap:9px}
+        .dell-layout-editor summary i{color:#ff8fa4}
+        .dell-editor-hint{font-size:11px;font-weight:400;color:#b7a4b6}
+        .dell-layout-editor[open] .dell-editor-hint{font-size:0}
+        .dell-layout-editor[open] .dell-editor-hint:after{content:"Свернуть";font-size:11px}
+        .dell-editor-help{font-size:11px;color:#b7a4b6;margin:14px 0 10px}
+        #preview-container{background-color:#100e12;background-image:linear-gradient(45deg,#1d1720 25%,transparent 25%),linear-gradient(-45deg,#1d1720 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#1d1720 75%),linear-gradient(-45deg,transparent 75%,#1d1720 75%);background-size:24px 24px;background-position:0 0,0 12px,12px -12px,-12px 0;border:1px solid #443341}
+        #operator-overlay-canvas .draggable-item:hover{outline-color:#ef354e}
+        :where(#main-header,#view-operator) :is(button,input,select,textarea):not(#operator-overlay-canvas *){border-radius:9px;box-shadow:none}
+        :where(#main-header,#view-operator) :is(input:not([type=range]):not([type=checkbox]):not([type=color]),select,textarea):not(#operator-overlay-canvas *){background:#0c0b0e;border-color:#443744;color:#f4f1f2}
+        :where(#main-header,#view-operator) input[type=range]:not(#operator-overlay-canvas *){accent-color:#ef354e}
+        :where(#main-header,#view-operator) :is(button,input,select,textarea,summary):focus-visible{outline:2px solid #ff8096;outline-offset:3px}
+        :where(#main-header,#view-operator) :is([class*="bg-slate-800"],[class*="bg-slate-900"],[class*="bg-slate-950"]):not(#operator-overlay-canvas *){background-color:#1c191f}
+        :where(#main-header,#view-operator) :is([class*="border-slate-"],[class*="border-obs-border"]):not(#operator-overlay-canvas *){border-color:#3c313e}
+        :where(#main-header,#view-operator) :is([class*="text-slate-400"],[class*="text-slate-500"]):not(#operator-overlay-canvas *){color:#b3a6b6}
+        :where(#main-header,#view-operator) :is([class*="text-indigo-"],[class*="text-purple-"],[class*="text-sky-"],[class*="text-pink-"],[class*="text-amber-"]):not(#operator-overlay-canvas *){color:#ff9ab0}
+        :where(#main-header,#view-operator) :is([class*="bg-indigo-"],[class*="bg-purple-"],[class*="bg-sky-"],[class*="bg-pink-"],[class*="bg-amber-"]):not(#operator-overlay-canvas *){background-color:#492130;border-color:#81354a;color:#ffe6ec}
+        :where(#main-header,#view-operator) button:is([class*="bg-indigo-600"],[class*="bg-purple-600"],[class*="bg-emerald-600"],[class*="bg-sky-600"],[class*="bg-pink-600"],[class*="bg-amber-600"]):not(#operator-overlay-canvas *){background:#ef354e;color:#fff;border-color:#ef354e;font-weight:650}
+        :where(#main-header,#view-operator) button:is([class*="bg-indigo-600"],[class*="bg-purple-600"],[class*="bg-emerald-600"],[class*="bg-sky-600"],[class*="bg-pink-600"],[class*="bg-amber-600"]):hover:not(#operator-overlay-canvas *){background:#ff4961}
+        #view-operator [id^=tab-btn-]{border:1px solid transparent;border-radius:8px;justify-content:center;padding:10px 8px;color:#b5a5b8;background:transparent;white-space:nowrap}
+        #view-operator [id^=tab-btn-][class*="border-indigo-500"]{background:#44212d;border-color:#823249;color:#fff}
+        #view-operator [id^=tab-btn-] i{color:inherit}
+        #view-operator>div:last-child>div>div:has(>[id^=tab-btn-]){display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding-bottom:16px}
+        #video-timelines{border-color:#483340}
+        #moderator-presence-list{margin-top:10px}
+        #main-header>div:last-child{flex-wrap:wrap;justify-content:flex-end;gap:10px}
+        @media(min-width:1024px){#view-operator{grid-template-columns:minmax(0,1fr) 420px}#view-operator>div{grid-column:auto!important}}
+        @media(max-width:1023px){body:not(.obs-overlay-mode) #main-header{padding:20px 18px;flex-wrap:wrap}body:not(.obs-overlay-mode) #view-operator{padding:18px;grid-template-columns:1fr}#main-header>div:last-child{justify-content:flex-start}#main-header>div:last-child>div:first-child{display:none}}
+        @media(max-width:600px){.dell-title{font-size:25px}.dell-subtitle{font-size:10px}#main-header button{padding:9px 11px}#view-operator>div:last-child>div,#view-operator>div:first-child>div{padding:16px}#view-operator #active-elements-list{min-height:140px;max-height:45vh}#view-operator h2{font-size:14px}}
+        @media(prefers-reduced-motion:reduce){#main-header .animate-pulse,#view-operator .animate-pulse:not(#operator-overlay-canvas *){animation:none}}
     </style>
 </head>
 <body class="bg-obs-dark text-slate-100 font-sans min-h-screen antialiased flex flex-col selection:bg-indigo-600 selection:text-white">
 
     <header id="main-header" class="bg-obs-card/90 backdrop-blur border-b border-obs-border px-6 py-3.5 sticky top-0 z-50 flex items-center justify-between shadow-2xl">
         <div class="flex items-center gap-3">
-            <div class="bg-indigo-600 text-white p-2 rounded-xl font-black text-lg flex items-center justify-center w-10 h-10 shadow-lg shadow-indigo-600/30">
-                <i class="fa-solid fa-tower-broadcast"></i>
-            </div>
+            <div class="dell-mark" aria-hidden="true"><i></i><i></i><i></i></div>
             <div>
-                <h1 class="font-extrabold text-sm tracking-wider uppercase text-white leading-tight">OBS LIVE OVERLAY STUDIO</h1>
-                <p class="text-[11px] text-slate-400">Пульт Модератора & Облачный Оверлей</p>
+                <h1 class="dell-title">Dell-пульт</h1>
+                <p class="dell-subtitle">Всё, что происходит поверх стрима.</p>
             </div>
         </div>
 
@@ -120,42 +176,13 @@
                     <div id="moderator-presence-list" class="flex flex-wrap gap-2 text-xs text-slate-400">Загрузка списка…</div>
                 </section>
                 
-                <div class="bg-obs-card border border-obs-border rounded-2xl p-4 shadow-xl flex flex-col">
-                    <div class="flex items-center justify-between gap-2 mb-3">
-                        <div class="flex items-center gap-2">
-                            <span class="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse"></span>
-                            <h2 class="font-bold text-xs uppercase tracking-wider text-slate-300">Пульт управления (Предпросмотр 16:9)</h2>
-                        </div>
-                        
-                        <div class="flex items-center gap-2">
-                            <select id="stream-provider" onchange="onStreamProviderChange()" class="bg-slate-900 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-300 outline-none focus:border-indigo-500">
-                                <option value="twitch">Twitch Embed</option>
-                                <option value="screenshot">Скриншот игры / Фон</option>
-                                <option value="testvideo">Тестовый поток</option>
-                            </select>
-                            <input type="text" id="twitch-channel-input" value="dell11q" onchange="onStreamProviderChange()" placeholder="Канал Twitch" class="bg-slate-900 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-200 w-28 outline-none focus:border-indigo-500">
-                        </div>
-                    </div>
-
-                    <div id="preview-container" class="relative w-full aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 shadow-inner group select-none">
-                        <div id="preview-bg-holder" class="w-full h-full pointer-events-none">
-                            <iframe id="twitch-frame" class="w-full h-full border-0 pointer-events-auto" title="Предпросмотр Twitch"></iframe>
-                        </div>
-
+                <details id="overlay-layout-editor" class="dell-layout-editor">
+                    <summary><span><i class="fa-solid fa-up-down-left-right" aria-hidden="true"></i> Расположение элементов</span><span class="dell-editor-hint">Открыть редактор</span></summary>
+                    <p class="dell-editor-help">Перетаскивайте элементы мышью. Колесо — масштаб, Alt и край окна — обрезка сайта.</p>
+                    <div id="preview-container" class="relative w-full aspect-video rounded-xl overflow-hidden group select-none">
                         <div id="operator-overlay-canvas" class="absolute inset-0 z-20 overflow-hidden pointer-events-auto"></div>
-
-                        <div class="absolute top-3 right-3 z-30 flex items-center gap-2">
-                            <label class="bg-slate-900/90 hover:bg-slate-800 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer backdrop-blur shadow flex items-center gap-1.5 transition">
-                                <i class="fa-solid fa-camera text-indigo-400"></i> Загрузить фон стрима
-                                <input type="file" accept="image/*" class="hidden" onchange="uploadCustomBackground(event)">
-                            </label>
-                        </div>
-
-                        <div class="absolute bottom-3 left-3 z-30 bg-slate-900/90 border border-slate-700/80 px-3 py-1 rounded-lg text-[11px] text-slate-300 backdrop-blur pointer-events-none flex items-center gap-1.5">
-                            <i class="fa-solid fa-hand-pointer text-indigo-400"></i> Перетаскивайте элементы мышкой • Колесико: масштаб
-                        </div>
                     </div>
-                </div>
+                </details>
 
                 <div class="bg-obs-card border border-obs-border rounded-2xl p-4 shadow-xl flex-1 flex flex-col">
                     <div class="flex items-center justify-between mb-3">
@@ -1452,7 +1479,7 @@
                 pollVoiceOffers();
             } else {
                 switchView('operator');
-                onStreamProviderChange();
+                document.getElementById('overlay-layout-editor')?.addEventListener('toggle', () => updateOverlayPositions());
                 startModeratorPresence();
                 startSharedStateStreams();
             }
@@ -3740,33 +3767,6 @@
         }
 
         window.addEventListener('pagehide', stopModeratorMic);
-
-        function onStreamProviderChange() {
-            const provider = document.getElementById('stream-provider').value;
-            const channelName = document.getElementById('twitch-channel-input').value.trim() || 'dell11q';
-            const bgHolder = document.getElementById('preview-bg-holder');
-
-            if (provider === 'twitch') {
-                const host = window.location.hostname || 'localhost';
-                bgHolder.innerHTML = `<iframe src="https://player.twitch.tv/?channel=${channelName}&parent=${host}&muted=true" class="w-full h-full border-0 pointer-events-auto"></iframe>`;
-            } else if (provider === 'screenshot') {
-                bgHolder.innerHTML = `<img src="https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1280&q=80" class="w-full h-full object-cover opacity-60">`;
-            } else if (provider === 'testvideo') {
-                bgHolder.innerHTML = `<video src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4" autoplay loop muted class="w-full h-full object-cover opacity-50"></video>`;
-            }
-        }
-
-        function uploadCustomBackground(e) {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function(evt) {
-                document.getElementById('stream-provider').value = 'screenshot';
-                document.getElementById('preview-bg-holder').innerHTML = `<img src="${evt.target.result}" class="w-full h-full object-cover">`;
-                showToast('Фон предпросмотра обновлен');
-            };
-            reader.readAsDataURL(file);
-        }
 
         const pendingOverlayTransforms = new Map();
         const observedOverlayCanvases = new WeakSet();
