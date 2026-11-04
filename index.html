@@ -1106,6 +1106,25 @@
                 }
                 requestUrl.searchParams.set('auth', idToken);
             }
+            const assetBase = new URL(FIREBASE_ASSETS_URL, window.location.href);
+            const assetPath = requestUrl.pathname.slice(assetBase.pathname.length + 1);
+            const isAsset = requestUrl.origin === assetBase.origin &&
+                requestUrl.pathname.startsWith(assetBase.pathname + '/') &&
+                assetPath.endsWith('.json') && !assetPath.slice(0, -5).includes('/');
+            const assetKey = isAsset ? decodeURIComponent(assetPath.slice(0, -5)) : null;
+            const method = (options.method || 'GET').toUpperCase();
+            if (assetKey && method === 'GET' && !new Headers(options.headers).has('X-Firebase-ETag')) {
+                const cached = loadedMediaAssets.get(assetKey);
+                if (cached) return new Response(JSON.stringify(cached), { headers: { 'Content-Type': 'application/json' } });
+                const response = await fetch(requestUrl.toString(), options);
+                if (response.ok) {
+                    const value = await response.clone().json();
+                    // Catalogs remain live; cache only media payloads during this session.
+                    if (typeof value === 'string') loadedMediaAssets.set(assetKey, value);
+                }
+                return response;
+            }
+            if (assetKey && method !== 'GET') loadedMediaAssets.delete(assetKey);
             return fetch(requestUrl.toString(), options);
         }
 
@@ -1122,22 +1141,36 @@
             let source = null;
             let retryTimer = null;
             let closed = false;
-            const connect = () => {
-                if (closed || !overlayAuth?.idToken) return;
-                const url = new URL(`${path}.json`, window.location.href);
-                url.searchParams.set('auth', overlayAuth.idToken);
-                source = new EventSource(url.toString());
-                ['put', 'patch'].forEach(type => source.addEventListener(type, onUpdate));
-                source.onerror = async () => {
-                    source?.close();
-                    if (closed || retryTimer) return;
-                    retryTimer = setTimeout(async () => {
-                        retryTimer = null;
-                        if (closed) return;
-                        if (overlayAuth?.expiresAt < Date.now() + 60000) await refreshOverlayAuth();
-                        connect();
-                    }, 2000);
-                };
+            let retryDelay = 2000;
+            const connect = async () => {
+                if (closed) return;
+                const isOverlay = document.body.classList.contains('obs-overlay-mode');
+                let auth = isOverlay ? overlayAuth : moderatorAuth;
+                try {
+                    if (auth?.expiresAt < Date.now() + 60000) {
+                        await (isOverlay ? refreshOverlayAuth() : refreshModeratorAuth());
+                        auth = isOverlay ? overlayAuth : moderatorAuth;
+                    }
+                    if (closed || !auth?.idToken) return;
+                    const url = new URL(`${path}.json`, window.location.href);
+                    url.searchParams.set('auth', auth.idToken);
+                    source = new EventSource(url.toString());
+                    source.onopen = () => { retryDelay = 2000; };
+                    ['put', 'patch'].forEach(type => source.addEventListener(type, onUpdate));
+                    source.onerror = retry;
+                } catch (error) {
+                    console.error('Ошибка подключения потока Firebase:', error);
+                    retry();
+                }
+            };
+            const retry = () => {
+                source?.close();
+                if (closed || retryTimer) return;
+                retryTimer = setTimeout(() => {
+                    retryTimer = null;
+                    connect();
+                }, retryDelay);
+                retryDelay = Math.min(60000, retryDelay * 2);
             };
             connect();
             return {
@@ -1150,10 +1183,34 @@
             };
         }
 
-        function startOverlayRealtimeUpdates() {
+        let streamedOverlayState = null;
+        let streamedStatePending = false;
+        let streamedStateTimer = null;
+        function flushStreamedOverlayState() {
+            clearTimeout(streamedStateTimer);
+            if (!streamedStatePending) return;
+            if (isDragging || isResizingOverlay || wheelSaveTimers.size ||
+                videoVolumeSaveTimer !== null || cloudWritesPending > 0 || cloudStateFetchPending) {
+                streamedStateTimer = setTimeout(flushStreamedOverlayState, 250);
+                return;
+            }
+            streamedStatePending = false;
+            fetchStateFromCloud(streamedOverlayState);
+        }
+
+        function startSharedStateStreams() {
             overlayStateStream = openOverlayRealtimeStream(
                 FIREBASE_DB_URL.replace(/\.json$/, ''),
-                () => fetchStateFromCloud()
+                event => {
+                    try {
+                        streamedOverlayState = mergeFirebaseStreamEvent(streamedOverlayState, event);
+                        streamedStatePending = true;
+                        flushStreamedOverlayState();
+                    } catch (error) {
+                        console.error('Ошибка потока состояния:', error);
+                        fetchStateFromCloud();
+                    }
+                }
             );
             overlayFastUpdatesStream = openOverlayRealtimeStream(
                 FIREBASE_FAST_UPDATES_URL,
@@ -1163,32 +1220,55 @@
                         applyFastOverlayUpdates(fastStreamState);
                     } catch (error) {
                         console.error('Ошибка потока координат:', error);
-                        fetchFastUpdatesFromCloud();
                     }
                 }
             );
+            const fallback = setInterval(() => {
+                if (!overlayStateStream?.connected) fetchStateFromCloud();
+                if (!overlayFastUpdatesStream?.connected) fetchFastUpdatesFromCloud();
+            }, 15000);
+            window.addEventListener('pagehide', () => {
+                clearInterval(fallback);
+                clearTimeout(streamedStateTimer);
+                overlayStateStream?.close();
+                overlayFastUpdatesStream?.close();
+            }, { once: true });
+        }
+
+        function startOverlayRealtimeUpdates() {
+            startSharedStateStreams();
+            let voiceStreamState = null;
+            let soundStreamState = null;
             overlayVoiceStream = openOverlayRealtimeStream(
                 `${FIREBASE_VOICE_URL}/sessions`,
-                () => pollVoiceOffers()
+                event => {
+                    try {
+                        voiceStreamState = mergeFirebaseStreamEvent(voiceStreamState, event);
+                        pollVoiceOffers(voiceStreamState);
+                    } catch (error) { console.error('Ошибка потока микрофона:', error); }
+                }
             );
             overlaySoundEventsStream = openOverlayRealtimeStream(
                 FIREBASE_SOUND_EVENTS_URL,
-                () => fetchOverlaySoundEvents()
+                event => {
+                    try {
+                        soundStreamState = mergeFirebaseStreamEvent(soundStreamState, event);
+                        fetchOverlaySoundEvents(soundStreamState);
+                    } catch (error) { console.error('Ошибка потока звуков:', error); }
+                }
             );
-            fetchOverlaySoundEvents();
-
-            setInterval(() => {
-                if (!overlayStateStream?.connected) fetchStateFromCloud();
-            }, 1000);
-            setInterval(() => {
-                if (!overlayFastUpdatesStream?.connected) fetchFastUpdatesFromCloud();
-            }, 1000);
-            setInterval(() => {
-                if (!overlayVoiceStream?.connected) pollVoiceOffers();
-            }, 1000);
-            setInterval(() => {
-                if (!overlaySoundEventsStream?.connected) fetchOverlaySoundEvents();
-            }, 1000);
+            // Process a coalesced latest snapshot too if an event arrived during playback setup.
+            const fallback = setInterval(() => {
+                if (overlayVoiceStream?.connected) pollVoiceOffers(voiceStreamState);
+                else pollVoiceOffers();
+                if (overlaySoundEventsStream?.connected) fetchOverlaySoundEvents(soundStreamState);
+                else fetchOverlaySoundEvents();
+            }, 15000);
+            window.addEventListener('pagehide', () => {
+                clearInterval(fallback);
+                overlayVoiceStream?.close();
+                overlaySoundEventsStream?.close();
+            }, { once: true });
         }
 
         function moderatorPresenceEntryUrl() {
@@ -1369,17 +1449,12 @@
             if (modeParam === 'overlay') {
                 switchView('overlay');
                 startOverlayRealtimeUpdates();
-                fetchStateFromCloud();
-                fetchFastUpdatesFromCloud();
                 pollVoiceOffers();
             } else {
                 switchView('operator');
                 onStreamProviderChange();
                 startModeratorPresence();
-                setInterval(() => {
-                    if (!isDragging) fetchStateFromCloud();
-                }, 2000);
-                fetchStateFromCloud();
+                startSharedStateStreams();
             }
 
             window.addEventListener('pointermove', handleGlobalMouseMove);
@@ -1486,7 +1561,7 @@
             if (uploadedMediaAssetKeys.has(assetKey)) return Promise.resolve();
             if (pendingMediaAssetUploads.has(assetKey)) return pendingMediaAssetUploads.get(assetKey);
 
-            const upload = firebaseFetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json`, {
+            const upload = firebaseFetch(`${FIREBASE_ASSETS_URL}/${encodeURIComponent(assetKey)}.json?print=silent`, {
                 method: 'PUT',
                 body: JSON.stringify(item.url),
                 headers: { 'Content-Type': 'application/json' }
@@ -1505,6 +1580,7 @@
             const assetKey = item.assetKey;
             const cachedUrl = loadedMediaAssets.get(assetKey);
             if (cachedUrl) {
+                item.url = cachedUrl;
                 const currentItem = activeOverlays.find(current => current.id === item.id);
                 if (currentItem && !currentItem.url) {
                     currentItem.url = cachedUrl;
@@ -1592,7 +1668,7 @@
                 }
 
                 const mergedState = [...mergedById.values()];
-                const writeResponse = await firebaseFetch(FIREBASE_DB_URL, {
+                const writeResponse = await firebaseFetch(FIREBASE_DB_URL + '?print=silent', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json', 'If-Match': etag },
                     body: JSON.stringify(mergedState)
@@ -1760,17 +1836,18 @@
             return stableItem;
         }
 
-        function fetchStateFromCloud() {
+        function fetchStateFromCloud(streamData) {
             if (isDragging || isResizingOverlay || wheelSaveTimers.size || videoVolumeSaveTimer !== null || cloudWritesPending > 0 || cloudStateFetchPending) return;
             cloudStateFetchPending = true;
             const fetchMutationVersion = overlayMutationVersion;
-
-            firebaseFetch(FIREBASE_DB_URL, { cache: 'no-store' })
-                .then(res => {
+            // Stream events already contain the data: do not download it a second time.
+            const request = arguments.length
+                ? Promise.resolve(streamData === null ? null : JSON.parse(JSON.stringify(streamData)))
+                : firebaseFetch(FIREBASE_DB_URL, { cache: 'no-store' }).then(res => {
                     if (!res.ok) throw new Error(`Firebase HTTP ${res.status}`);
                     return res.json();
-                })
-                .then(data => {
+                });
+            request.then(data => {
                     let newData = [];
                     if (Array.isArray(data)) {
                         newData = data;
@@ -3328,13 +3405,17 @@
                 .catch(error => console.error('Звук запущен, но событие не удалось подтвердить в Firebase:', error));
         }
 
-        async function fetchOverlaySoundEvents() {
+        async function fetchOverlaySoundEvents(streamData) {
             if (!document.body.classList.contains('obs-overlay-mode') || soundEventsFetchPending) return;
             soundEventsFetchPending = true;
             try {
-                const response = await firebaseFetch(`${FIREBASE_SOUND_EVENTS_URL}.json`, { cache: 'no-store' });
-                if (!response.ok) throw await getFirebaseError(response);
-                const events = await response.json() || {};
+                let events = streamData;
+                if (!arguments.length) {
+                    const response = await firebaseFetch(`${FIREBASE_SOUND_EVENTS_URL}.json`, { cache: 'no-store' });
+                    if (!response.ok) throw await getFirebaseError(response);
+                    events = await response.json();
+                }
+                events = events || {};
                 Object.entries(events).forEach(([eventId, soundEvent]) => {
                     if (!soundEvent?.assetKey || handledSoundEventIds.has(eventId)) return;
                     if (typeof soundEvent.createdAt === 'number' && Date.now() - soundEvent.createdAt > 120000) {
@@ -3356,13 +3437,17 @@
             }
         }
 
-        async function pollVoiceOffers() {
+        async function pollVoiceOffers(streamData) {
             if (!document.body.classList.contains('obs-overlay-mode') || voiceOfferPollPending) return;
             voiceOfferPollPending = true;
             try {
-                const response = await firebaseFetch(`${FIREBASE_VOICE_URL}/sessions.json`, { cache: 'no-store' });
-                if (!response.ok) throw new Error(`Firebase HTTP ${response.status}`);
-                const sessions = await response.json() || {};
+                let sessions = streamData;
+                if (!arguments.length) {
+                    const response = await firebaseFetch(`${FIREBASE_VOICE_URL}/sessions.json`, { cache: 'no-store' });
+                    if (!response.ok) throw new Error(`Firebase HTTP ${response.status}`);
+                    sessions = await response.json();
+                }
+                sessions = sessions || {};
                 const liveSessionIds = new Set(Object.keys(sessions));
                 obsVoiceConnections.forEach((entry, sessionId) => {
                     if (!liveSessionIds.has(sessionId)) closeObsVoiceConnection(sessionId);
