@@ -1501,7 +1501,8 @@
                 customWidgetId: item.customWidgetId,
                 volume: item.volume,
                 durationMs: item.durationMs,
-                crop: item.crop
+                crop: item.crop,
+                playback: item.playback
             };
             if (typeof cleanItem.url === 'string' && cleanItem.url.startsWith('data:')) {
                 cleanItem.assetKey = item.assetKey || item.id;
@@ -2085,8 +2086,193 @@
             showToast('Изображение отправлено');
         }
 
+        // Player telemetry stays local. Only moderator commands are saved to Firebase.
+        const videoTelemetry = new Map();
+        const initializedVideoPlayers = new WeakSet();
+
+        function videoClock(value) {
+            const seconds = Math.max(0, Math.floor(Number(value) || 0));
+            return (seconds >= 3600 ? Math.floor(seconds / 3600) + ':' : '') +
+                String(Math.floor(seconds / 60) % 60).padStart(2, '0') + ':' +
+                String(seconds % 60).padStart(2, '0');
+        }
+
+        function playbackPosition(playback, duration = 0) {
+            let position = Math.max(0, Number(playback?.position) || 0);
+            if (playback && !playback.paused) position += Math.max(0, Date.now() - playback.updatedAt) / 1000;
+            if (duration > 0) position = Math.min(position, duration);
+            return position;
+        }
+
+        function youtubeCommand(frame, func, args = []) {
+            frame?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), new URL(frame.src).origin);
+        }
+
+        function applyOverlayPlayback(node, item) {
+            if (!['video', 'youtube'].includes(item.type)) return;
+            const player = node.querySelector(item.type === 'video' ? 'video' : 'iframe');
+            if (!player) return;
+            if (!initializedVideoPlayers.has(player)) {
+                initializedVideoPlayers.add(player);
+                const ready = () => {
+                    delete player.dataset.playbackCommand;
+                    const current = activeOverlays.find(candidate => candidate.id === item.id);
+                    if (!current) return;
+                    if (item.type === 'youtube') {
+                        player.contentWindow?.postMessage(JSON.stringify({ event: 'listening', id: item.id }), new URL(player.src).origin);
+                    }
+                    applyOverlayPlayback(node, current);
+                };
+                player.addEventListener(item.type === 'video' ? 'loadedmetadata' : 'load', ready);
+                if (item.type === 'video') player.addEventListener('error', () => {
+                    videoTelemetry.set(item.id, { error: 'Не удалось загрузить видео' });
+                });
+            }
+            const state = item.playback;
+            if (!state || player.dataset.playbackCommand === state.commandId) return;
+            if (item.type === 'video' && player.readyState < 1) return;
+            const duration = item.type === 'video' ? player.duration : videoTelemetry.get(item.id)?.duration;
+            let position = playbackPosition(state);
+            if (Number.isFinite(duration) && duration > 0) {
+                position = item.type === 'video' && !state.paused ? position % duration : Math.min(position, duration);
+            }
+            if (item.type === 'video') {
+                player.currentTime = position;
+                if (state.paused) player.pause();
+                else player.play().catch(() => {
+                    delete player.dataset.playbackCommand;
+                    videoTelemetry.set(item.id, { error: 'Браузер заблокировал воспроизведение' });
+                });
+            } else {
+                youtubeCommand(player, 'seekTo', [position, true]);
+                youtubeCommand(player, state.paused ? 'pauseVideo' : 'playVideo');
+            }
+            player.dataset.playbackCommand = state.commandId;
+        }
+
+        function controlOverlayVideo(id, action, value) {
+            const item = activeOverlays.find(candidate => candidate.id === id);
+            if (!item || !['video', 'youtube'].includes(item.type)) return;
+            const telemetry = videoTelemetry.get(id) || {};
+            const position = action === 'seek' ? Number(value) :
+                (Number.isFinite(telemetry.position) ? telemetry.position : playbackPosition(item.playback));
+            if (!Number.isFinite(position)) return;
+            item.playback = {
+                position: Math.max(0, position),
+                paused: action === 'pause' || (action === 'seek' && (item.playback?.paused ?? telemetry.paused ?? false)),
+                updatedAt: Date.now(),
+                commandId: Date.now().toString(36) + '_' + Math.random().toString(36).slice(2)
+            };
+            // Discard pre-command telemetry while waiting for the player to report its new position.
+            videoTelemetry.delete(id);
+            for (const canvasId of ['operator-overlay-canvas', 'obs-render-canvas']) {
+                const node = document.getElementById(canvasId)?.querySelector('[data-id="' + id + '"]');
+                if (node) applyOverlayPlayback(node, item);
+            }
+            saveAndBroadcast();
+        }
+
+        window.addEventListener('message', event => {
+            if (!['https://www.youtube.com', 'https://www.youtube-nocookie.com'].includes(event.origin)) return;
+            let data = event.data;
+            if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
+            for (const item of activeOverlays.filter(candidate => candidate.type === 'youtube')) {
+                const frames = document.querySelectorAll('[data-id="' + item.id + '"] iframe');
+                const frame = Array.from(frames).find(candidate => candidate.contentWindow === event.source);
+                if (!frame) continue;
+                if (data?.event === 'onReady') {
+                    delete frame.dataset.playbackCommand;
+                    applyOverlayPlayback(frame.parentElement, item);
+                }
+                if (['infoDelivery', 'initialDelivery'].includes(data?.event) && data.info) {
+                    const previous = videoTelemetry.get(item.id) || {};
+                    const info = data.info;
+                    videoTelemetry.set(item.id, {
+                        ...previous,
+                        ...(Number.isFinite(info.duration) ? { duration: info.duration } : {}),
+                        ...(Number.isFinite(info.currentTime) ? { position: info.currentTime } : {}),
+                        ...(Number.isFinite(info.playerState) ? { paused: info.playerState !== 1 } : {}),
+                        ...(info.videoData?.title ? { title: info.videoData.title } : {})
+                    });
+                    if (!frame.dataset.playbackReady && Number.isFinite(info.duration) && info.duration > 0) {
+                        frame.dataset.playbackReady = 'true';
+                        delete frame.dataset.playbackCommand;
+                        applyOverlayPlayback(frame.parentElement, item);
+                    }
+                }
+            }
+        });
+
+        function refreshVideoTimelines() {
+            if (document.body.classList.contains('obs-overlay-mode')) return;
+            const tab = document.getElementById('tab-content-video');
+            if (!tab) return;
+            let list = document.getElementById('video-timelines');
+            if (!list) {
+                list = document.createElement('div');
+                list.id = 'video-timelines';
+                list.className = 'space-y-3 border-t border-slate-700 pt-4';
+                tab.appendChild(list);
+            }
+            const items = activeOverlays.filter(item => ['video', 'youtube'].includes(item.type));
+            for (const row of Array.from(list.children)) {
+                if (!items.some(item => item.id === row.dataset.videoId)) row.remove();
+            }
+            for (const item of items) {
+                const node = document.getElementById('operator-overlay-canvas')?.querySelector('[data-id="' + item.id + '"]');
+                const video = node?.querySelector('video');
+                if (video && video.readyState >= 1) videoTelemetry.set(item.id, {
+                    duration: Number.isFinite(video.duration) ? video.duration : 0,
+                    position: video.currentTime, paused: video.paused
+                });
+                const telemetry = videoTelemetry.get(item.id) || {};
+                let row = Array.from(list.children).find(candidate => candidate.dataset.videoId === item.id);
+                if (!row) {
+                    row = document.createElement('div');
+                    row.dataset.videoId = item.id;
+                    row.className = 'rounded-xl bg-slate-900 border border-slate-700 p-3 space-y-2';
+                    row.innerHTML = '<div data-video-title class="text-sm font-semibold break-words"></div>' +
+                        '<div class="flex gap-2"><button type="button" data-play class="rounded-lg bg-purple-600 px-3 py-2 text-xs">Старт / продолжить</button>' +
+                        '<button type="button" data-pause class="rounded-lg bg-slate-700 px-3 py-2 text-xs">Пауза</button></div>' +
+                        '<input data-seek type="range" min="0" max="0" step="0.1" value="0" class="w-full accent-purple-500">' +
+                        '<div data-video-time class="text-xs text-slate-400"></div>';
+                    row.querySelector('[data-play]').onclick = () => controlOverlayVideo(item.id, 'play');
+                    row.querySelector('[data-pause]').onclick = () => controlOverlayVideo(item.id, 'pause');
+                    const slider = row.querySelector('[data-seek]');
+                    slider.oninput = () => {
+                        slider.dataset.editing = 'true';
+                        row.querySelector('[data-video-time]').textContent = videoClock(slider.value) + ' / ' + videoClock(slider.max);
+                    };
+                    slider.onchange = () => {
+                        delete slider.dataset.editing;
+                        controlOverlayVideo(item.id, 'seek', slider.value);
+                    };
+                    slider.addEventListener('pointercancel', () => { delete slider.dataset.editing; });
+                    list.appendChild(row);
+                }
+                const title = telemetry.title || item.title || (item.type === 'youtube' ? 'YouTube: ' + new URL(item.url).pathname.split('/').pop() : 'Видеофайл');
+                row.querySelector('[data-video-title]').textContent = title + (item.hidden ? ' (скрыто)' : '');
+                const slider = row.querySelector('[data-seek]');
+                slider.setAttribute('aria-label', 'Позиция видео: ' + title);
+                if (!slider.dataset.editing) {
+                    const duration = Number.isFinite(telemetry.duration) ? telemetry.duration : 0;
+                    const position = telemetry.position ?? playbackPosition(item.playback, duration);
+                    slider.max = String(duration);
+                    slider.value = String(Math.min(duration, position));
+                    slider.disabled = duration <= 0 || item.hidden;
+                    row.querySelector('[data-video-time]').textContent = telemetry.error ||
+                        (duration > 0 ? videoClock(position) + ' / ' + videoClock(duration) : 'Ожидание длительности (для прямого эфира перемотка может быть недоступна)');
+                }
+            }
+            for (const id of videoTelemetry.keys()) {
+                if (!items.some(item => item.id === id)) videoTelemetry.delete(id);
+            }
+        }
+        setInterval(refreshVideoTimelines, 500);
+
         let videoVolumeSaveTimer = null;
         function applyOverlayVideoVolume(node, item) {
+            applyOverlayPlayback(node, item);
             const volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.8)));
             if (item.type === 'video') {
                 const video = node.querySelector('video');
@@ -2163,6 +2349,7 @@
                 activeOverlays.push({
                     id: 'vid_' + Date.now(),
                     type: 'video',
+                    title: file.name,
                     url,
                     volume: Number.isFinite(volumeValue) ? volumeValue / 100 : 0.8,
                     anim: document.getElementById('global-anim-select').value,
@@ -2227,6 +2414,7 @@
             activeOverlays.push({
                 id: 'vid_' + Date.now(),
                 type: media.type,
+                title: media.type === 'video' ? (rawUrl.split('/').pop().split('?')[0] || 'Видео по ссылке') : undefined,
                 url: media.url,
                 volume: Number(document.getElementById('video-volume').value) / 100,
                 anim: document.getElementById('global-anim-select').value,
@@ -3611,7 +3799,7 @@
         }
 
         function getOverlayRenderSignature(item) {
-            const { x, y, scale, stretchX, stretchY, anim, volume, url, html, ...contentState } = item;
+            const { x, y, scale, stretchX, stretchY, anim, volume, playback, url, html, ...contentState } = item;
             if (url !== undefined) contentState.mediaUrl = url;
             if (html !== undefined) contentState.widgetHtml = html;
             return JSON.stringify(contentState);
