@@ -1024,7 +1024,15 @@
             );
             overlayFastUpdatesStream = openOverlayRealtimeStream(
                 FIREBASE_FAST_UPDATES_URL,
-                () => fetchFastUpdatesFromCloud()
+                event => {
+                    try {
+                        fastStreamState = mergeFirebaseStreamEvent(fastStreamState, event);
+                        applyFastOverlayUpdates(fastStreamState);
+                    } catch (error) {
+                        console.error('Ошибка потока координат:', error);
+                        fetchFastUpdatesFromCloud();
+                    }
+                }
             );
             overlayVoiceStream = openOverlayRealtimeStream(
                 `${FIREBASE_VOICE_URL}/sessions`,
@@ -1492,15 +1500,100 @@
             return cloudSaveQueue;
         }
 
+        // Keep only the newest unsent update; never let requests for one item overtake each other.
+        const fastUpdateQueues = new Map();
         function sendFastUpdate(item, fields) {
-            const url = `${FIREBASE_FAST_UPDATES_URL}/${encodeURIComponent(item.id)}.json`;
-            firebaseFetch(url, {
-                method: 'PATCH',
-                body: JSON.stringify({ ...fields, updatedAt: Date.now() }),
-                headers: { 'Content-Type': 'application/json' }
-            }).then(async response => {
-                if (!response.ok) throw await getFirebaseError(response);
-            }).catch(err => console.error("Ошибка быстрой синхронизации:", err));
+            let queue = fastUpdateQueues.get(item.id);
+            if (!queue) {
+                queue = { pending: null, sending: false };
+                fastUpdateQueues.set(item.id, queue);
+            }
+            queue.pending = { ...queue.pending, x: item.x, y: item.y,
+                scale: item.scale || 1, stretchX: item.stretchX || 1,
+                stretchY: item.stretchY || 1, ...fields, updatedAt: Date.now() };
+            if (queue.sending) return;
+            queue.sending = true;
+            const flush = async () => {
+                try {
+                    while (queue.pending) {
+                        const payload = queue.pending;
+                        queue.pending = null;
+                        const response = await firebaseFetch(`${FIREBASE_FAST_UPDATES_URL}/${encodeURIComponent(item.id)}.json`, {
+                            method: 'PATCH', body: JSON.stringify(payload),
+                            headers: { 'Content-Type': 'application/json' }
+                        });
+                        if (!response.ok) throw await getFirebaseError(response);
+                    }
+                } catch (error) {
+                    console.error('Ошибка быстрой синхронизации:', error);
+                } finally {
+                    queue.sending = false;
+                    fastUpdateQueues.delete(item.id);
+                }
+            };
+            void flush();
+        }
+
+        let fastStreamState = {};
+        const appliedFastUpdates = new Map();
+        function mergeFirebaseStreamEvent(state, event) {
+            const message = JSON.parse(event.data);
+            const setPath = (root, path, value) => {
+                const parts = path.split('/').filter(Boolean);
+                if (parts.some(part => ['__proto__', 'prototype', 'constructor'].includes(part))) return root;
+                if (!parts.length) return value;
+                root = root && typeof root === 'object' ? root : {};
+                let target = root;
+                for (const part of parts.slice(0, -1)) {
+                    if (!target[part] || typeof target[part] !== 'object') target[part] = {};
+                    target = target[part];
+                }
+                if (value === null) delete target[parts[parts.length - 1]];
+                else target[parts[parts.length - 1]] = value;
+                return root;
+            };
+            if (event.type === 'patch' && message.data && typeof message.data === 'object') {
+                for (const [key, value] of Object.entries(message.data)) {
+                    state = setPath(state, `${message.path}/${key}`, value);
+                }
+                return state;
+            }
+            return setPath(state, message.path, message.data);
+        }
+
+        function applyFastOverlayUpdates(updates) {
+            if (!updates || typeof updates !== 'object') return;
+            let changed = false;
+            let styleChanged = false;
+            for (const [id, update] of Object.entries(updates)) {
+                const item = activeOverlays.find(current => current.id === id);
+                if (!item || !update || typeof update !== 'object') continue;
+                const fingerprint = JSON.stringify(update);
+                if (appliedFastUpdates.get(id) === fingerprint) continue;
+                appliedFastUpdates.set(id, fingerprint);
+                if (id === dragTargetId && isDragging ||
+                    id === resizeOverlayTargetId && isResizingOverlay ||
+                    wheelSaveTimers.has(id)) continue;
+                if (typeof update.updatedAt === 'number' && Date.now() - update.updatedAt > 15000) continue;
+                for (const field of ['x', 'y', 'scale', 'stretchX', 'stretchY']) {
+                    if (Number.isFinite(update[field]) && item[field] !== update[field]) {
+                        item[field] = update[field];
+                        changed = true;
+                    }
+                }
+                if (update.content !== undefined && item.content !== update.content) {
+                    item.content = update.content;
+                    changed = true;
+                }
+                for (const field of ['font', 'size', 'color', 'effect', 'bgStyle', 'anim']) {
+                    if (update[field] !== undefined && item[field] !== update[field]) {
+                        item[field] = update[field];
+                        changed = styleChanged = true;
+                    }
+                }
+            }
+            if (styleChanged) renderOverlaysSmart();
+            else if (changed) updateOverlayPositions(true);
         }
 
         function persistOverlayPatch(item, fields) {
@@ -1515,43 +1608,7 @@
             fastUpdatesFetchPending = true;
             firebaseFetch(`${FIREBASE_FAST_UPDATES_URL}.json`, { cache: 'no-store' })
                 .then(res => res.json())
-                .then(updates => {
-                    if (!updates || typeof updates !== 'object') return;
-                    let changed = false;
-                    let styleChanged = false;
-                    Object.entries(updates).forEach(([id, update]) => {
-                        const item = activeOverlays.find(current => current.id === id);
-                        if (!item || !update || typeof update !== 'object') return;
-                        if (typeof update.updatedAt === 'number' && Date.now() - update.updatedAt > 15000) return;
-                        if (update.x !== undefined && item.x !== update.x) {
-                            item.x = update.x;
-                            changed = true;
-                        }
-                        if (update.y !== undefined && item.y !== update.y) {
-                            item.y = update.y;
-                            changed = true;
-                        }
-                        ['stretchX', 'stretchY'].forEach(field => {
-                            if (update[field] !== undefined && item[field] !== update[field]) {
-                                item[field] = update[field];
-                                changed = true;
-                            }
-                        });
-                        if (update.content !== undefined && item.content !== update.content) {
-                            item.content = update.content;
-                            changed = true;
-                        }
-                        ['font', 'size', 'color', 'effect', 'bgStyle', 'anim'].forEach(field => {
-                            if (update[field] !== undefined && item[field] !== update[field]) {
-                                item[field] = update[field];
-                                changed = true;
-                                styleChanged = true;
-                            }
-                        });
-                    });
-                    if (styleChanged) renderOverlays();
-                    else if (changed) updateOverlayPositions();
-                })
+                .then(applyFastOverlayUpdates)
                 .catch(err => console.error("Ошибка быстрой загрузки:", err))
                 .finally(() => { fastUpdatesFetchPending = false; });
         }
@@ -1566,7 +1623,7 @@
         }
 
         function fetchStateFromCloud() {
-            if (isDragging || cloudWritesPending > 0 || cloudStateFetchPending) return;
+            if (isDragging || isResizingOverlay || wheelSaveTimers.size || cloudWritesPending > 0 || cloudStateFetchPending) return;
             cloudStateFetchPending = true;
             const fetchMutationVersion = overlayMutationVersion;
 
@@ -1589,7 +1646,7 @@
                         throw new Error('В Firebase найдено состояние с неизвестным форматом; локальный список сохранён');
                     }
                     newData = newData.filter(item => item.id !== 'moderation_dog_pet');
-                    if (fetchMutationVersion !== overlayMutationVersion || cloudWritesPending > 0 || isDragging) return;
+                    if (fetchMutationVersion !== overlayMutationVersion || cloudWritesPending > 0 || isDragging || isResizingOverlay || wheelSaveTimers.size) return;
                     lastSyncedOverlaySnapshot = normalizeCloudOverlayList(newData);
                     const previousItems = new Map(activeOverlays.map(item => [item.id, item]));
                     newData = newData.map(item => {
@@ -1623,23 +1680,22 @@
                 .finally(() => { cloudStateFetchPending = false; });
         }
 
-        function updateOverlayPositions() {
+        function updateOverlayPositions(positionsOnly = false) {
+            const canvases = [document.getElementById('obs-render-canvas'),
+                document.getElementById('operator-overlay-canvas')];
             activeOverlays.forEach(item => {
-                [document.getElementById('obs-render-canvas'), document.getElementById('operator-overlay-canvas')]
-                    .forEach(canvas => {
-                        const node = canvas && canvas.querySelector(`[data-id="${item.id}"]`);
-                        if (node) {
-                            node.style.left = item.x + '%';
-                            node.style.top = item.y + '%';
-                            applyOverlayTransform(node, item);
-                            if (item.type === 'text') {
-                                const textNode = node.querySelector('.text-content');
-                                if (textNode) textNode.innerText = item.content || '';
-                            }
-                        }
-                    });
+                canvases.forEach(canvas => {
+                    const node = canvas && canvas.querySelector(`[data-id="${item.id}"]`);
+                    if (!node) return;
+                    applyOverlayTransform(node, item);
+                    if (item.type === 'text') {
+                        const textNode = node.querySelector('.text-content');
+                        const content = item.content || '';
+                        if (textNode && textNode.textContent !== content) textNode.textContent = content;
+                    }
+                });
             });
-            if (!document.body.classList.contains('obs-overlay-mode')) {
+            if (!positionsOnly && !document.body.classList.contains('obs-overlay-mode')) {
                 renderActiveElementsList(document.getElementById('active-elements-list'));
             }
         }
@@ -2685,23 +2741,25 @@
             }
         }
 
+        const wheelSaveTimers = new Map();
         function handleCanvasWheel(e) {
             const target = e.target.closest('[data-id]');
             if (!target) return;
             e.preventDefault();
-            const itemId = target.dataset.id;
-            const item = activeOverlays.find(i => i.id === itemId);
-            if (!item) return;
-
-            if (!item.scale) item.scale = 1;
-            if (e.deltaY < 0) {
-                item.scale = Math.min(item.scale + 0.1, 3);
-            } else {
-                item.scale = Math.max(item.scale - 0.1, 0.3);
-            }
-
+            const item = activeOverlays.find(i => i.id === target.dataset.id);
+            if (!item || !e.deltaY) return;
+            const delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 300 : 1);
+            item.scale = Math.max(0.3, Math.min(3,
+                (item.scale || 1) * Math.exp(-Math.max(-100, Math.min(100, delta)) * 0.0015)));
             applyOverlayTransform(target, item);
-            saveAndBroadcast();
+            sendFastUpdate(item, { scale: item.scale });
+            clearTimeout(wheelSaveTimers.get(item.id));
+            wheelSaveTimers.set(item.id, setTimeout(() => {
+                wheelSaveTimers.delete(item.id);
+                if (activeOverlays.some(current => current.id === item.id)) {
+                    persistOverlayPatch(item, { scale: item.scale });
+                }
+            }, 180));
         }
 
         // --- ПЛАВНОЕ ПЕРЕТАСКИВАНИЕ В РЕАЛЬНОМ ВРЕМЕНИ БЕЗ СБРОСА ВИДЕО ---
@@ -2804,12 +2862,11 @@
                 // Двигаем DOM-элемент напрямую без пересоздания внутренностей (видео не перезапускается!)
                 const targetNode = container.querySelector(`[data-id="${dragTargetId}"]`);
                 if (targetNode) {
-                    targetNode.style.left = newX + '%';
-                    targetNode.style.top = newY + '%';
+                    applyOverlayTransform(targetNode, item);
                 }
 
                 const now = Date.now();
-                if (now - lastDragBroadcastAt >= 100) {
+                if (now - lastDragBroadcastAt >= 50) {
                     lastDragBroadcastAt = now;
                     sendFastUpdate(item, { x: newX, y: newY });
                 }
@@ -3224,9 +3281,45 @@
             reader.readAsDataURL(file);
         }
 
+        const pendingOverlayTransforms = new Map();
+        const observedOverlayCanvases = new WeakSet();
+        let overlayTransformFrame = 0;
+        const overlayCanvasResizeObserver = new ResizeObserver(() => updateOverlayPositions());
+
         function applyOverlayTransform(node, item) {
-            const scale = item.scale || 1;
-            node.style.transform = `translate3d(-50%, -50%, 0) scaleX(${scale * (item.stretchX || 1)}) scaleY(${scale * (item.stretchY || 1)})`;
+            pendingOverlayTransforms.set(node, {
+                x: item.x, y: item.y, scale: item.scale || 1,
+                stretchX: item.stretchX || 1, stretchY: item.stretchY || 1
+            });
+            if (overlayTransformFrame) return;
+            overlayTransformFrame = requestAnimationFrame(() => {
+                overlayTransformFrame = 0;
+                const sizes = new Map();
+                // Measure each canvas once, before any style writes.
+                for (const [element] of pendingOverlayTransforms) {
+                    const canvas = element.parentElement;
+                    if (!element.isConnected || !canvas || sizes.has(canvas)) continue;
+                    sizes.set(canvas, { width: canvas.clientWidth, height: canvas.clientHeight });
+                    if (!observedOverlayCanvases.has(canvas)) {
+                        observedOverlayCanvases.add(canvas);
+                        overlayCanvasResizeObserver.observe(canvas);
+                    }
+                }
+                for (const [element, pose] of pendingOverlayTransforms) {
+                    const size = sizes.get(element.parentElement);
+                    if (!element.isConnected || !size) continue;
+                    element.style.transition = element.dataset.poseInitialized
+                        ? (element.parentElement.id === 'operator-overlay-canvas'
+                            ? 'transform 60ms linear' : 'translate 80ms linear, transform 80ms linear')
+                        : 'none';
+                    element.dataset.poseInitialized = 'true';
+                    element.style.left = '0';
+                    element.style.top = '0';
+                    element.style.translate = `${pose.x * size.width / 100}px ${pose.y * size.height / 100}px`;
+                    element.style.transform = `translate3d(-50%, -50%, 0) scaleX(${pose.scale * pose.stretchX}) scaleY(${pose.scale * pose.stretchY})`;
+                }
+                pendingOverlayTransforms.clear();
+            });
         }
 
         function getOverlayRenderSignature(item) {
@@ -3476,7 +3569,8 @@
             node.style.left = item.x + '%';
             node.style.top = item.y + '%';
             applyOverlayTransform(node, item);
-            if (!isInteractive) node.style.transition = 'left 100ms cubic-bezier(0.2, 0.8, 0.2, 1), top 100ms cubic-bezier(0.2, 0.8, 0.2, 1)';
+            node.style.willChange = 'translate, transform';
+            node.style.transition = isInteractive ? 'transform 60ms linear' : 'translate 80ms linear, transform 80ms linear';
 
             if (isPointerInteractive) {
                 node.onpointerdown = (e) => startDrag(e, item.id);
