@@ -1575,7 +1575,7 @@
                     id === resizeOverlayTargetId && isResizingOverlay ||
                     wheelSaveTimers.has(id)) continue;
                 if (typeof update.updatedAt === 'number' && Date.now() - update.updatedAt > 15000) continue;
-                for (const field of ['x', 'y', 'scale', 'stretchX', 'stretchY']) {
+                for (const field of ['x', 'y', 'scale', 'stretchX', 'stretchY', 'volume']) {
                     if (Number.isFinite(update[field]) && item[field] !== update[field]) {
                         item[field] = update[field];
                         changed = true;
@@ -1870,6 +1870,33 @@
             showToast('Изображение отправлено');
         }
 
+        let videoVolumeSaveTimer = null;
+        function applyOverlayVideoVolume(node, item) {
+            if (item.type !== 'video') return;
+            const video = node.querySelector('video');
+            if (video) video.volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.8)));
+        }
+
+        function onLiveVolumeInput(value) {
+            const percent = Math.max(0, Math.min(100, Number(value)));
+            if (!Number.isFinite(percent)) return;
+            document.getElementById('vol-val').textContent = percent + '%';
+            const videos = activeOverlays.filter(item => item.type === 'video');
+            for (const item of videos) {
+                item.volume = percent / 100;
+                for (const canvasId of ['operator-overlay-canvas', 'obs-render-canvas']) {
+                    const node = document.getElementById(canvasId)?.querySelector(`[data-id="${item.id}"]`);
+                    if (node) applyOverlayVideoVolume(node, item);
+                }
+                sendFastUpdate(item, { volume: item.volume });
+            }
+            clearTimeout(videoVolumeSaveTimer);
+            if (videos.length) {
+                // Persist the latest value once the slider stops moving.
+                videoVolumeSaveTimer = setTimeout(() => saveAndBroadcast(), 180);
+            }
+        }
+
         async function handleVideoFileUpload(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -1949,7 +1976,7 @@
                 id: 'vid_' + Date.now(),
                 type: media.type,
                 url: media.url,
-                volume: (parseInt(document.getElementById('video-volume').value) || 80) / 100,
+                volume: Number(document.getElementById('video-volume').value) / 100,
                 anim: document.getElementById('global-anim-select').value,
                 scale: 1,
                 x: 50,
@@ -3287,6 +3314,7 @@
         const overlayCanvasResizeObserver = new ResizeObserver(() => updateOverlayPositions());
 
         function applyOverlayTransform(node, item) {
+            applyOverlayVideoVolume(node, item);
             pendingOverlayTransforms.set(node, {
                 x: item.x, y: item.y, scale: item.scale || 1,
                 stretchX: item.stretchX || 1, stretchY: item.stretchY || 1
@@ -3589,7 +3617,7 @@
             } else if (item.type === 'image') {
                 contentHtml = `<img src="${escapeHtml(item.url)}" class="max-w-[400px] h-auto rounded-2xl shadow-2xl object-contain">`;
             } else if (item.type === 'video') {
-                contentHtml = `<video src="${escapeHtml(item.url)}" autoplay loop playsinline preload="auto" class="max-w-[500px] rounded-2xl shadow-2xl" onloadedmetadata="this.volume=${item.volume ?? 0.8};"></video>`;
+                contentHtml = `<video src="${escapeHtml(item.url)}" autoplay loop playsinline preload="auto" class="max-w-[500px] rounded-2xl shadow-2xl"></video>`;
             } else if (item.type === 'youtube') {
                 contentHtml = `<iframe src="${escapeHtml(item.url)}" class="w-[500px] h-[281px] rounded-2xl border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
             } else if (item.type === 'tiktok') {
@@ -3601,6 +3629,7 @@
             }
 
             node.innerHTML = contentHtml;
+            applyOverlayVideoVolume(node, item);
             if (item.type === 'ephemeral-widget') {
                 window.setTimeout(() => {
                     if (node.isConnected) removeOverlayItem(item.id);
