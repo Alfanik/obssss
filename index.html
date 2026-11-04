@@ -1576,6 +1576,7 @@
                     wheelSaveTimers.has(id)) continue;
                 if (typeof update.updatedAt === 'number' && Date.now() - update.updatedAt > 15000) continue;
                 for (const field of ['x', 'y', 'scale', 'stretchX', 'stretchY', 'volume']) {
+                    if (field === 'volume' && (videoVolumeSaveTimer !== null || cloudWritesPending > 0)) continue;
                     if (Number.isFinite(update[field]) && item[field] !== update[field]) {
                         item[field] = update[field];
                         changed = true;
@@ -1623,7 +1624,7 @@
         }
 
         function fetchStateFromCloud() {
-            if (isDragging || isResizingOverlay || wheelSaveTimers.size || cloudWritesPending > 0 || cloudStateFetchPending) return;
+            if (isDragging || isResizingOverlay || wheelSaveTimers.size || videoVolumeSaveTimer !== null || cloudWritesPending > 0 || cloudStateFetchPending) return;
             cloudStateFetchPending = true;
             const fetchMutationVersion = overlayMutationVersion;
 
@@ -1646,7 +1647,7 @@
                         throw new Error('В Firebase найдено состояние с неизвестным форматом; локальный список сохранён');
                     }
                     newData = newData.filter(item => item.id !== 'moderation_dog_pet');
-                    if (fetchMutationVersion !== overlayMutationVersion || cloudWritesPending > 0 || isDragging || isResizingOverlay || wheelSaveTimers.size) return;
+                    if (fetchMutationVersion !== overlayMutationVersion || cloudWritesPending > 0 || isDragging || isResizingOverlay || wheelSaveTimers.size || videoVolumeSaveTimer !== null) return;
                     lastSyncedOverlaySnapshot = normalizeCloudOverlayList(newData);
                     const previousItems = new Map(activeOverlays.map(item => [item.id, item]));
                     newData = newData.map(item => {
@@ -1891,9 +1892,13 @@
                 sendFastUpdate(item, { volume: item.volume });
             }
             clearTimeout(videoVolumeSaveTimer);
+            videoVolumeSaveTimer = null;
             if (videos.length) {
                 // Persist the latest value once the slider stops moving.
-                videoVolumeSaveTimer = setTimeout(() => saveAndBroadcast(), 180);
+                videoVolumeSaveTimer = setTimeout(() => {
+                    videoVolumeSaveTimer = null;
+                    saveAndBroadcast();
+                }, 180);
             }
         }
 
