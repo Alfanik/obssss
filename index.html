@@ -890,6 +890,107 @@
         let startW = 260;
         let startH = 160;
 
+        const ACCOUNT_DIRECTORY_URL = FIREBASE_DB_URL.replace('obs_state.json', 'obs_account_directory');
+        let accountAdminVerified = false;
+
+        async function resolveModeratorEmail(username) {
+            const login = username.toLowerCase();
+            if (MODERATOR_EMAILS[login]) return MODERATOR_EMAILS[login];
+            if (!/^[a-z0-9_-]{3,32}$/.test(login)) return null;
+            const response = await fetch(ACCOUNT_DIRECTORY_URL + '/' + encodeURIComponent(login) + '.json', { cache: 'no-store' });
+            if (!response.ok) throw new Error('Не удалось прочитать каталог аккаунтов');
+            const record = await response.json();
+            return typeof record?.email === 'string' ? record.email : null;
+        }
+
+        async function updateAccountAdminTab() {
+            accountAdminVerified = false;
+            const oldButton = document.getElementById('tab-btn-accounts');
+            const oldPanel = document.getElementById('tab-content-accounts');
+            if (oldButton) oldButton.hidden = true;
+            if (oldPanel) oldPanel.classList.add('hidden');
+            if (!moderatorAuth?.idToken || document.body.classList.contains('obs-overlay-mode')) return;
+            const token = moderatorAuth.idToken;
+            try {
+                const response = await fetch(FIREBASE_AUTH_URL + '/accounts:lookup?key=' + FIREBASE_API_KEY, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ idToken: token })
+                });
+                const data = await response.json();
+                const user = data.users?.[0];
+                if (!response.ok || moderatorAuth?.idToken !== token ||
+                    user?.localId !== moderatorAuth.uid ||
+                    user?.email?.toLowerCase() !== MODERATOR_EMAILS.alfanik) return;
+                accountAdminVerified = true;
+                if (oldButton) { oldButton.hidden = false; return; }
+                const button = document.createElement('button');
+                button.id = 'tab-btn-accounts';
+                button.type = 'button';
+                button.className = 'px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 cursor-pointer';
+                button.textContent = 'Аккаунты';
+                button.onclick = () => switchControlTab('accounts');
+                document.getElementById('tab-btn-sounds').parentElement.appendChild(button);
+                const panel = document.createElement('div');
+                panel.id = 'tab-content-accounts';
+                panel.className = 'space-y-4 hidden';
+                panel.innerHTML = `<form id="account-link-form" class="space-y-3">
+                    <p class="text-xs text-slate-400">Сначала создайте пользователя в Firebase Authentication, затем привяжите логин здесь.</p>
+                    <label class="block text-xs">Почта<input id="account-link-email" type="email" required autocomplete="off" class="block w-full mt-1 bg-slate-950 border border-slate-700 rounded-lg p-2"></label>
+                    <label class="block text-xs">Пароль<input id="account-link-password" type="password" required autocomplete="new-password" class="block w-full mt-1 bg-slate-950 border border-slate-700 rounded-lg p-2"></label>
+                    <label class="block text-xs">Логин<input id="account-link-login" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_-]{3,32}" autocomplete="off" class="block w-full mt-1 bg-slate-950 border border-slate-700 rounded-lg p-2"><span class="text-slate-400">Латинские буквы, цифры, дефис и подчёркивание, 3–32 символа.</span></label>
+                    <button type="submit" class="w-full bg-indigo-600 rounded-lg p-3 text-sm font-bold">Привязать аккаунт</button>
+                    <p id="account-link-status" role="status" class="text-xs text-slate-300"></p>
+                </form>`;
+                document.getElementById('tab-content-sounds').insertAdjacentElement('afterend', panel);
+                panel.querySelector('form').onsubmit = linkModeratorAccount;
+            } catch { /* No admin controls without a successful identity check. */ }
+        }
+
+        async function linkModeratorAccount(event) {
+            event.preventDefault();
+            if (!accountAdminVerified) return;
+            const form = event.currentTarget;
+            const button = form.querySelector('button');
+            const status = document.getElementById('account-link-status');
+            const passwordInput = document.getElementById('account-link-password');
+            const email = document.getElementById('account-link-email').value.trim().toLowerCase();
+            const login = document.getElementById('account-link-login').value.trim().toLowerCase();
+            if (!/^[a-z0-9_-]{3,32}$/.test(login) || MODERATOR_EMAILS[login]) {
+                status.textContent = 'Логин недопустим или уже занят'; return;
+            }
+            button.disabled = true;
+            status.textContent = 'Проверка аккаунта…';
+            try {
+                // REST sign-in validates credentials without replacing Alfanik's session.
+                const response = await fetch(FIREBASE_AUTH_URL + '/accounts:signInWithPassword?key=' + FIREBASE_API_KEY, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password: passwordInput.value, returnSecureToken: true })
+                });
+                passwordInput.value = '';
+                const account = await response.json();
+                if (!response.ok) throw new Error('Проверьте почту и пароль созданного в Firebase аккаунта');
+                if (Object.values(MODERATOR_EMAILS).includes(email)) throw new Error('Этот аккаунт уже имеет постоянный логин');
+                const path = ACCOUNT_DIRECTORY_URL + '/' + encodeURIComponent(login) + '.json';
+                const existing = await firebaseFetch(path, { headers: { 'X-Firebase-ETag': 'true' }, cache: 'no-store' });
+                if (!existing.ok) throw new Error('Каталог недоступен. Проверьте правила Firebase');
+                const etag = existing.headers.get('ETag');
+                if (await existing.json()) throw new Error('Этот логин уже занят');
+                if (!etag) throw new Error('Не удалось проверить свободный логин');
+                const saved = await firebaseFetch(path, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json', 'if-match': etag },
+                    body: JSON.stringify({ email, uid: account.localId })
+                });
+                if (!saved.ok) throw new Error(saved.status === 412 ? 'Логин уже занят' : 'Firebase запретил сохранение. Добавьте правило для каталога');
+                status.textContent = 'Готово. Новый пользователь входит по логину ' + login + ' и своему паролю Firebase.';
+                form.reset();
+            } catch (error) {
+                status.textContent = error.message || 'Не удалось привязать аккаунт';
+            } finally {
+                passwordInput.value = '';
+                button.disabled = false;
+            }
+        }
+
         function saveModeratorAuth(auth) {
             moderatorAuth = {
                 idToken: auth.idToken,
@@ -1156,6 +1257,7 @@
                 document.querySelector('#main-header > div:last-child')?.appendChild(controls);
             }
             controls.innerHTML = `<span>Модератор: ${escapeHtml(moderatorAuth.username)}</span><button type="button" class="text-slate-400 hover:text-white underline" onclick="signOutModerator()">Выйти</button>`;
+            updateAccountAdminTab();
         }
 
         function signOutModerator() {
@@ -1201,7 +1303,9 @@
                 gate.querySelector('#moderator-login-form').addEventListener('submit', async event => {
                     event.preventDefault();
                     const username = gate.querySelector('#moderator-login-name').value.trim();
-                    const email = MODERATOR_EMAILS[username.toLowerCase()];
+                    let email;
+                    try { email = await resolveModeratorEmail(username); }
+                    catch { gate.querySelector('#moderator-login-error').textContent = 'Не удалось проверить логин. Проверьте подключение и правила каталога Firebase.'; return; }
                     const errorNode = gate.querySelector('#moderator-login-error');
                     const submit = gate.querySelector('#moderator-login-submit');
                     if (!email) {
@@ -4139,9 +4243,11 @@
         }
 
         function switchControlTab(tab) {
-            ['text', 'image', 'video', 'links', 'widgets', 'awards', 'sounds'].forEach(t => {
+            if (tab === 'accounts' && !accountAdminVerified) return;
+            ['text', 'image', 'video', 'links', 'widgets', 'awards', 'sounds', 'accounts'].forEach(t => {
                 const btn = document.getElementById(`tab-btn-${t}`);
                 const content = document.getElementById(`tab-content-${t}`);
+                if (!btn || !content) return;
                 if (t === tab) {
                     btn.classList.add('border-indigo-500', 'text-white');
                     btn.classList.remove('border-transparent', 'text-slate-400');
