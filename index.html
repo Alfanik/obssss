@@ -3276,9 +3276,28 @@
             return faceMeshLibraryPromise;
         }
 
+        function setFaceMaskStatus(root, message, isError = false) {
+            if (!root) return;
+            let status = root.querySelector('.face-mask-status');
+            if (!status) {
+                status = document.createElement('div');
+                status.className = 'face-mask-status';
+                status.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:22px;text-align:center;background:rgba(8,12,20,.88);color:white;font:600 15px/1.45 system-ui,sans-serif';
+                root.appendChild(status);
+            }
+            status.style.color = isError ? '#fecaca' : 'white';
+            status.textContent = message;
+        }
+
         function startFaceMaskRendering(node, mask) {
             const canvas = node.querySelector('.face-mask-root canvas');
-            if (!canvas || !navigator.mediaDevices?.getUserMedia) return;
+            if (!canvas) return;
+            const root = canvas.parentElement;
+            if (!navigator.mediaDevices?.getUserMedia) {
+                setFaceMaskStatus(root, 'OBS не предоставляет странице доступ к камере. Проверьте разрешение камеры и HTTPS.', true);
+                return;
+            }
+            setFaceMaskStatus(root, 'Подключаем камеру…');
             const context = canvas.getContext('2d');
             const video = document.createElement('video');
             video.muted = true;
@@ -3367,14 +3386,15 @@
                 try {
                     await loadFaceMeshLibrary();
                     if (stopped || !node.isConnected) return stop();
-                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 15, max: 15 } }, audio: false });
                     if (stopped || !node.isConnected) return stop();
                     video.srcObject = stream;
                     await video.play();
-                    canvas.width = video.videoWidth || 1280;
-                    canvas.height = video.videoHeight || 720;
+                    root.querySelector('.face-mask-status')?.remove();
+                    canvas.width = video.videoWidth || 640;
+                    canvas.height = video.videoHeight || 360;
                     faceMesh = new window.FaceMesh({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
-                    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: .55, minTrackingConfidence: .55 });
+                    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: .55, minTrackingConfidence: .55 });
                     faceMesh.onResults(results => {
                         context.clearRect(0, 0, canvas.width, canvas.height);
                         if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) context.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -3382,20 +3402,19 @@
                     });
                     const renderFrame = async () => {
                         if (stopped || !node.isConnected) return stop();
+                        const frameStartedAt = performance.now();
+                        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) context.drawImage(video, 0, 0, canvas.width, canvas.height);
                         if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !framePending) {
                             framePending = true;
                             try { await faceMesh.send({ image: video }); } catch (error) { console.error('Ошибка трекинга лица:', error); }
                             framePending = false;
                         }
-                        if (!stopped) requestAnimationFrame(renderFrame);
+                        if (!stopped) setTimeout(renderFrame, Math.max(0, 67 - (performance.now() - frameStartedAt)));
                     };
                     renderFrame();
                 } catch (error) {
                     console.error('Не удалось запустить маску лица:', error);
-                    const message = document.createElement('div');
-                    message.textContent = 'Разрешите OBS доступ к веб-камере и проверьте подключение к интернету.';
-                    message.style.cssText = 'position:absolute;left:50%;top:85%;transform:translateX(-50%);padding:10px 16px;border-radius:12px;background:#111827dd;color:white;font:600 16px system-ui';
-                    node.appendChild(message);
+                    setFaceMaskStatus(root, `Камера или трекинг не запустились (${error.name || error.message}). Проверьте доступ OBS к камере и подключение к интернету.`, true);
                     stop();
                 }
             })();
