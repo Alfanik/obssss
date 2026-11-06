@@ -1730,6 +1730,7 @@
                             activeOverlays = mergedState.filter(item => item.id !== 'moderation_dog_pet').map(item => ({ ...item, ...(urlsById.has(item.id) ? { url: urlsById.get(item.id) } : {}) }));
                             renderOverlaysSmart();
                         }
+                        return true;
                     })
             )
                 .catch(err => {
