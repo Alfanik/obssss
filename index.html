@@ -4119,6 +4119,15 @@
             }
 
             node.innerHTML = contentHtml;
+            // Saved widgets carry their original CSS, including obsolete motion overrides.
+            // Normalize these broadcast scenes when rendering on either client.
+            if ((item.type === 'widget' || item.type === 'ephemeral-widget') &&
+                node.querySelector('.chibi-flight-scene, .burger-scene, .award-scene')) {
+                node.querySelectorAll('style').forEach(style => {
+                    style.textContent = style.textContent.replace(
+                        /@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)\s*\{(?:[^{}]|\{[^{}]*\})*\}/gi, '');
+                });
+            }
             if (item.type === 'website') setupWebsiteControls(node, item, isInteractive);
             if (item.type === 'shared-timer') {
                 const display = node.querySelector('[data-shared-timer]');
@@ -4394,7 +4403,7 @@
                 .award-title{max-width:620px;margin-top:5px;font-size:clamp(25px,3vw,46px);line-height:1.05;font-weight:950;text-wrap:balance}
                 @keyframes awardPop{0%{opacity:0;transform:translateY(50px) scale(.55)}12%,78%{opacity:1;transform:translateY(0) scale(1)}88%,100%{opacity:0;transform:translateY(-20px) scale(.94)}}
                 @keyframes cupShine{to{transform:rotate(-8deg) scale(1.08)}}
-                @media(prefers-reduced-motion:reduce){.award-card,.award-cup{animation-duration:.01ms!important;animation-iteration-count:1!important}}
+                /* A broadcast award must remain visible for its full presentation. */
             </style><div class="award-scene"><div class="award-card"><span class="award-cup">🏆</span><div><div class="award-label">ПРЕМИЯ ОТ МОДЕРАТОРОВ</div><div class="award-title">${escapeHtml(awardTitle)}</div></div></div></div>`;
             sendTimedInteraction('Премия: ' + awardTitle, html, 8500);
             if (soundId) playCustomSound(soundId);
