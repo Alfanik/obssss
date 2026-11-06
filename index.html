@@ -1071,35 +1071,67 @@
             localStorage.setItem('obs_overlay_auth', JSON.stringify(overlayAuth));
         }
 
-        async function refreshOverlayAuth() {
+        async function overlayAuthFetch(url, options) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 15000);
+            try { return await fetch(url, { ...options, signal: controller.signal }); }
+            finally { clearTimeout(timer); }
+        }
+
+        let overlayRefreshPromise = null;
+        function refreshOverlayAuth() {
+            if (!overlayRefreshPromise) {
+                overlayRefreshPromise = refreshOverlayAuthRequest()
+                    .finally(() => { overlayRefreshPromise = null; });
+            }
+            return overlayRefreshPromise;
+        }
+
+        async function refreshOverlayAuthRequest() {
             if (!overlayAuth?.refreshToken) return false;
             try {
-                const response = await fetch(`${FIREBASE_TOKEN_URL}/token?key=${FIREBASE_API_KEY}`, {
+                const response = await overlayAuthFetch(`${FIREBASE_TOKEN_URL}/token?key=${FIREBASE_API_KEY}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: overlayAuth.refreshToken })
                 });
                 const data = await response.json();
-                if (!response.ok) throw new Error(data.error?.message || 'Не удалось продлить сессию OBS');
+                if (!response.ok) {
+                    if (['INVALID_REFRESH_TOKEN', 'TOKEN_EXPIRED', 'USER_DISABLED', 'USER_NOT_FOUND'].includes(data.error?.message)) {
+                        overlayAuth = null;
+                        localStorage.removeItem('obs_overlay_auth');
+                    }
+                    throw new Error(data.error?.message || 'Не удалось продлить сессию OBS');
+                }
                 saveOverlayAuth({ idToken: data.id_token, refreshToken: data.refresh_token, expiresIn: data.expires_in });
                 return true;
             } catch (error) {
-                overlayAuth = null;
-                localStorage.removeItem('obs_overlay_auth');
+                console.warn('Сессия OBS временно недоступна:', error.message);
                 return false;
             }
         }
 
-        async function ensureOverlayAuth() {
-            try {
-                overlayAuth = JSON.parse(localStorage.getItem('obs_overlay_auth') || 'null');
-            } catch (error) {
-                overlayAuth = null;
+        let overlayEnsurePromise = null;
+        function ensureOverlayAuth() {
+            if (!overlayEnsurePromise) {
+                overlayEnsurePromise = ensureOverlayAuthRequest()
+                    .finally(() => { overlayEnsurePromise = null; });
+            }
+            return overlayEnsurePromise;
+        }
+
+        async function ensureOverlayAuthRequest() {
+            if (!overlayAuth) {
+                try { overlayAuth = JSON.parse(localStorage.getItem('obs_overlay_auth') || 'null'); }
+                catch (error) { overlayAuth = null; }
             }
             if (overlayAuth?.idToken && overlayAuth.expiresAt > Date.now() + 60000) return true;
-            if (overlayAuth?.refreshToken && await refreshOverlayAuth()) return true;
+            if (overlayAuth?.refreshToken) {
+                if (await refreshOverlayAuth()) return true;
+                if (overlayAuth?.refreshToken) return false;
+            }
             try {
-                const response = await fetch(`${FIREBASE_AUTH_URL}/accounts:signUp?key=${FIREBASE_API_KEY}`, {
+                const response = await overlayAuthFetch(`${FIREBASE_AUTH_URL}/accounts:signUp?key=${FIREBASE_API_KEY}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ returnSecureToken: true })
@@ -1109,11 +1141,7 @@
                 saveOverlayAuth(data);
                 return true;
             } catch (error) {
-                console.error('Не удалось подготовить OBS-оверлей без входа модератора:', error);
-                const status = document.createElement('div');
-                status.className = 'fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-6 text-center text-sm text-white';
-                status.textContent = 'Не удалось подключиться к Firebase. Включите Anonymous sign-in и проверьте правила Realtime Database.';
-                document.body.appendChild(status);
+                console.error('Не удалось подключить OBS; соединение будет восстановлено автоматически:', error);
                 return false;
             }
         }
@@ -1122,8 +1150,8 @@
             const requestUrl = new URL(url, window.location.href);
             if (requestUrl.hostname.endsWith('firebaseio.com')) {
                 const isOverlay = document.body.classList.contains('obs-overlay-mode');
-                if (isOverlay && overlayAuth && overlayAuth.expiresAt < Date.now() + 60000) {
-                    await refreshOverlayAuth();
+                if (isOverlay) {
+                    if (!await ensureOverlayAuth()) throw new Error('Восстанавливается соединение OBS');
                 } else if (!isOverlay && moderatorAuth && moderatorAuth.expiresAt < Date.now() + 60000) {
                     await refreshModeratorAuth();
                 }
@@ -1167,31 +1195,20 @@
         function openOverlayRealtimeStream(path, onUpdate) {
             let source = null;
             let retryTimer = null;
+            let renewalTimer = null;
             let closed = false;
+            let connecting = false;
             let retryDelay = 2000;
-            const connect = async () => {
-                if (closed) return;
-                const isOverlay = document.body.classList.contains('obs-overlay-mode');
-                let auth = isOverlay ? overlayAuth : moderatorAuth;
-                try {
-                    if (auth?.expiresAt < Date.now() + 60000) {
-                        await (isOverlay ? refreshOverlayAuth() : refreshModeratorAuth());
-                        auth = isOverlay ? overlayAuth : moderatorAuth;
-                    }
-                    if (closed || !auth?.idToken) return;
-                    const url = new URL(`${path}.json`, window.location.href);
-                    url.searchParams.set('auth', auth.idToken);
-                    source = new EventSource(url.toString());
-                    source.onopen = () => { retryDelay = 2000; };
-                    ['put', 'patch'].forEach(type => source.addEventListener(type, onUpdate));
-                    source.onerror = retry;
-                } catch (error) {
-                    console.error('Ошибка подключения потока Firebase:', error);
-                    retry();
+            const disconnect = () => {
+                clearTimeout(renewalTimer);
+                if (source) {
+                    source.onerror = null;
+                    source.close();
+                    source = null;
                 }
             };
             const retry = () => {
-                source?.close();
+                disconnect();
                 if (closed || retryTimer) return;
                 retryTimer = setTimeout(() => {
                     retryTimer = null;
@@ -1199,13 +1216,64 @@
                 }, retryDelay);
                 retryDelay = Math.min(60000, retryDelay * 2);
             };
+            const connect = async () => {
+                if (closed || connecting) return;
+                connecting = true;
+                try {
+                    const isOverlay = document.body.classList.contains('obs-overlay-mode');
+                    if (isOverlay) {
+                        if (!await ensureOverlayAuth()) throw new Error('Ожидание сессии OBS');
+                    } else if (moderatorAuth?.expiresAt < Date.now() + 60000) {
+                        await refreshModeratorAuth();
+                    }
+                    if (closed) return;
+                    const auth = isOverlay ? overlayAuth : moderatorAuth;
+                    if (!auth?.idToken) throw new Error('Сессия Firebase недоступна');
+                    disconnect();
+                    const url = new URL(`${path}.json`, window.location.href);
+                    url.searchParams.set('auth', auth.idToken);
+                    const current = source = new EventSource(url.toString());
+                    // Reopen before token expiry; quiet streams need renewal too.
+                    renewalTimer = setTimeout(retry, Math.max(1000, auth.expiresAt - Date.now() - 60000));
+                    const openingTimer = setTimeout(() => {
+                        if (source === current && current.readyState !== EventSource.OPEN) retry();
+                    }, 25000);
+                    current.onopen = () => { clearTimeout(openingTimer); retryDelay = 2000; };
+                    ['put', 'patch'].forEach(type => current.addEventListener(type, event => {
+                        if (source === current && !closed) onUpdate(event);
+                    }));
+                    current.addEventListener('auth_revoked', () => {
+                        if (source !== current) return;
+                        const authNow = isOverlay ? overlayAuth : moderatorAuth;
+                        if (authNow) authNow.expiresAt = 0;
+                        retry();
+                    });
+                    current.addEventListener('cancel', () => { if (source === current) retry(); });
+                    current.onerror = () => { clearTimeout(openingTimer); if (source === current) retry(); };
+                } catch (error) {
+                    console.warn('Переподключение потока Firebase:', error.message);
+                    retry();
+                } finally { connecting = false; }
+            };
+            const resume = () => {
+                if (closed || document.visibilityState === 'hidden') return;
+                if (!source || source.readyState !== EventSource.OPEN) {
+                    clearTimeout(retryTimer);
+                    retryTimer = null;
+                    connect();
+                }
+            };
+            window.addEventListener('online', resume);
+            document.addEventListener('visibilitychange', resume);
             connect();
             return {
                 get connected() { return source?.readyState === EventSource.OPEN; },
                 close() {
                     closed = true;
                     clearTimeout(retryTimer);
-                    source?.close();
+                    disconnect();
+                    window.removeEventListener('online', resume);
+                    document.removeEventListener('visibilitychange', resume);
                 }
             };
         }
@@ -1459,7 +1527,7 @@
             const isOverlay = modeParam === 'overlay';
             if (isOverlay) {
                 switchView('overlay');
-                if (!await ensureOverlayAuth()) return;
+                await ensureOverlayAuth(); // Streams retry even when OBS starts without a network.
             } else if (!await ensureModeratorAuth()) {
                 return;
             }
@@ -3799,13 +3867,14 @@
                     if (!element.isConnected || !size) continue;
                     element.style.transition = element.dataset.poseInitialized
                         ? (element.parentElement.id === 'operator-overlay-canvas'
-                            ? 'transform 60ms linear' : 'translate 80ms linear, transform 80ms linear')
+                            ? 'transform 60ms linear' : 'transform 80ms linear')
                         : 'none';
                     element.dataset.poseInitialized = 'true';
                     element.style.left = '0';
                     element.style.top = '0';
-                    element.style.translate = `${pose.x * size.width / 100}px ${pose.y * size.height / 100}px`;
-                    element.style.transform = `translate3d(-50%, -50%, 0) scaleX(${pose.scale * pose.stretchX}) scaleY(${pose.scale * pose.stretchY})`;
+                    // Older OBS Chromium does not support the individual CSS translate property.
+                    element.style.removeProperty('translate');
+                    element.style.transform = `translate3d(${pose.x * size.width / 100}px, ${pose.y * size.height / 100}px, 0) translate3d(-50%, -50%, 0) scaleX(${pose.scale * pose.stretchX}) scaleY(${pose.scale * pose.stretchY})`;
                 }
                 pendingOverlayTransforms.clear();
             });
@@ -4052,6 +4121,36 @@
             })();
         }
 
+        function configureObsSceneAnimations(node, html) {
+            if (!document.body.classList.contains('obs-overlay-mode')) return;
+            const natural = html.includes('@keyframes chibiNaturalFlight');
+            const animations = [
+                ['.chibi-flight-scene', natural ? 'chibiNaturalFlight 20s linear both' : 'chibiFlyby 13s cubic-bezier(.42,0,.25,1) both'],
+                ['.chibi-avatar', natural ? 'chibiNaturalBody 20s linear both' : 'chibiHover 1.1s ease-in-out infinite alternate'],
+                ['.chibi-board', natural ? 'chibiNaturalCard 20s linear both' : 'chibiBoardTurn 13s cubic-bezier(.2,.8,.2,1) both'],
+                ['.chibi-present-arm', 'chibiNaturalArm 20s linear both'],
+                ['.burger-person', 'burgerDrop 18s both'],
+                ['.burger-speech', 'burgerSpeech 18s ease both'],
+                ['.burger-qr-card', 'burgerQR 18s cubic-bezier(.2,.8,.2,1) both'],
+                ['.burger-grip-arm', 'burgerRunArm 18s ease-in-out both'],
+                ['.burger-rub-arm', 'burgerRub 18s ease-in-out both'],
+                ['.burger-head', 'burgerHead 18s ease-in-out both'],
+                ['.burger-leg-left', 'burgerLegLeft 18s ease-in-out both'],
+                ['.burger-leg-right', 'burgerLegRight 18s ease-in-out both'],
+                ['.burger-mouth-open', 'burgerMouth 18s linear both'],
+                ['.burger-mouth-smile', 'burgerSmile 18s linear both'],
+                ['.award-card', 'awardPop 7.5s cubic-bezier(.2,.8,.2,1) both'],
+                ['.award-cup', 'cupShine 1s ease-in-out infinite alternate']
+            ];
+            animations.forEach(([selector, animation]) => {
+                node.querySelectorAll(selector).forEach(element => {
+                    // Inline priority also wins over OBS source-level animation overrides.
+                    element.style.setProperty('animation', animation, 'important');
+                    element.style.setProperty('animation-play-state', 'running', 'important');
+                });
+            });
+        }
+
         function createOverlayElementNode(item, isInteractive, animate = true) {
             const node = document.createElement('div');
             node.dataset.id = item.id;
@@ -4128,6 +4227,7 @@
                     style.textContent = style.textContent.replace(
                         /@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)\s*\{(?:[^{}]|\{[^{}]*\})*\}/gi, '');
                 });
+                configureObsSceneAnimations(node, String(contentHtml));
             }
             if (item.type === 'website') setupWebsiteControls(node, item, isInteractive);
             if (item.type === 'shared-timer') {
