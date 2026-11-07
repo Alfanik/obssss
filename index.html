@@ -243,6 +243,7 @@
                         <button id="tab-btn-awards" onclick="switchControlTab('awards')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-trophy text-amber-400"></i> Премии
                         </button>
+                        <button id="tab-btn-music" onclick="switchControlTab('music')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 flex items-center gap-1.5"><i class="fa-solid fa-music"></i> Музыка</button>
                         <button id="tab-btn-sounds" onclick="switchControlTab('sounds')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-volume-high text-pink-400"></i> Звуки
                         </button>
@@ -484,6 +485,22 @@
                             <button onclick="triggerStreamerAward(document.getElementById('award-custom-title').value)" class="rounded-lg bg-amber-600 hover:bg-amber-500 px-3 text-xs font-bold text-white">Вручить</button>
                         </div>
                         <div id="award-sound-hint" class="text-[10px] text-slate-500"></div>
+                    </div>
+
+                    <div id="tab-content-music" class="space-y-3 hidden">
+                        <h2>Музыка</h2>
+                        <p class="text-xs text-slate-400">Звук воспроизводится в OBS без изображения. На пульте музыка не звучит.</p>
+                        <form onsubmit="event.preventDefault(); addMusicLink()">
+                            <label for="music-url" class="text-xs">Ссылка на YouTube или аудиофайл</label>
+                            <input id="music-url" type="url" required placeholder="https://…/song.mp3" class="w-full border rounded-lg p-2 mt-1">
+                            <button class="bg-indigo-600 px-3 py-2 mt-2 text-xs">Добавить ссылку</button>
+                        </form>
+                        <label class="block text-xs">Или загрузить аудиофайл (до 4 МБ)
+                            <input id="music-file" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" onchange="addMusicFile(event)" class="block w-full mt-2 text-xs">
+                        </label>
+                        <p class="text-xs text-slate-400">Поддерживаются ссылки на видео YouTube, прямые аудиоссылки и файлы. YouTube звучит в OBS без видимого окна, но по-прежнему загружает видео и расходует трафик. Некоторые ролики запрещают встраивание или требуют входа. Spotify и Яндекс Музыка пока не поддерживаются.</p>
+                        <p id="music-status" role="status" class="text-xs text-slate-400"></p>
+                        <div id="music-tracks" class="space-y-3"></div>
                     </div>
 
                     <div id="tab-content-sounds" class="space-y-3 hidden">
@@ -2205,6 +2222,7 @@
         }
 
         function applyOverlayPlayback(node, item) {
+            if (isYoutubeMusic(item)) item = { ...item, type: 'youtube' };
             if (!['video', 'youtube'].includes(item.type)) return;
             const player = node.querySelector(item.type === 'video' ? 'video' : 'iframe');
             if (!player) return;
@@ -2283,14 +2301,14 @@
             if (!['https://www.youtube.com', 'https://www.youtube-nocookie.com'].includes(event.origin)) return;
             let data = event.data;
             if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
-            for (const item of activeOverlays.filter(candidate => candidate.type === 'youtube')) {
+            for (const item of activeOverlays.filter(candidate => candidate.type === 'youtube' || isYoutubeMusic(candidate))) {
                 const frames = document.querySelectorAll('[data-id="' + item.id + '"] iframe');
                 const frame = Array.from(frames).find(candidate => candidate.contentWindow === event.source);
                 if (!frame) continue;
                 if (data?.event === 'onReady') {
                     frame.dataset.playbackReady = 'true';
                     delete frame.dataset.playbackCommand;
-                    applyOverlayPlayback(frame.parentElement, item);
+                    applyOverlayVideoVolume(frame.parentElement, item);
                 }
                 if (['infoDelivery', 'initialDelivery'].includes(data?.event) && data.info) {
                     const previous = videoTelemetry.get(item.id) || {};
@@ -2305,7 +2323,7 @@
                     if (!frame.dataset.playbackReady && Number.isFinite(info.duration) && info.duration > 0) {
                         frame.dataset.playbackReady = 'true';
                         delete frame.dataset.playbackCommand;
-                        applyOverlayPlayback(frame.parentElement, item);
+                        applyOverlayVideoVolume(frame.parentElement, item);
                     }
                 }
             }
@@ -2380,6 +2398,7 @@
 
         let videoVolumeSaveTimer = null;
         function applyOverlayVideoVolume(node, item) {
+            if (item.type === 'music') { applyMusicPlayback(node, item); return; }
             applyOverlayPlayback(node, item);
             const volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.8)));
             if (item.type === 'video') {
@@ -4184,6 +4203,16 @@
                 else bgClass = 'px-4 py-2';
 
                 contentHtml = `<div class="${item.size} font-bold text-center tracking-wide ${effectClass} ${bgClass} text-content" style="${fontStyle}">${escapeHtml(item.content || '')}</div>`;
+            } else if (item.type === 'music') {
+                node.style.pointerEvents = 'none';
+                if (isYoutubeMusic(item)) {
+                    node.style.width = '1px';
+                    node.style.height = '1px';
+                    node.style.overflow = 'hidden';
+                    contentHtml = !isInteractive ? `<iframe title="Музыка YouTube" src="${escapeHtml(item.url)}" allow="autoplay; encrypted-media" tabindex="-1" aria-hidden="true" style="position:absolute;width:320px;height:180px;border:0;opacity:0;pointer-events:none"></iframe>` : '';
+                } else {
+                    contentHtml = item.url ? `<audio data-music src="${escapeHtml(item.url)}" preload="metadata" style="display:none"></audio>` : '';
+                }
             } else if (item.type === 'image') {
                 contentHtml = `<img src="${escapeHtml(item.url)}" class="max-w-[400px] h-auto rounded-2xl shadow-2xl object-contain">`;
             } else if (item.type === 'video') {
@@ -4647,9 +4676,185 @@
             saveAndBroadcast();
         }
 
+        function isYoutubeMusic(item) {
+            return item.type === 'music' && typeof item.url === 'string' &&
+                item.url.startsWith('https://www.youtube.com/embed/');
+        }
+
+        function youtubeMusicUrl(url) {
+            const host = url.hostname.toLowerCase();
+            let id = '';
+            if (host === 'youtu.be') id = url.pathname.split('/')[1];
+            else if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'www.youtube-nocookie.com'].includes(host)) {
+                const parts = url.pathname.split('/');
+                id = ['embed', 'shorts', 'live'].includes(parts[1]) ? parts[2] : url.searchParams.get('v');
+            } else return null;
+            if (!/^[a-zA-Z0-9_-]{11}$/.test(id || '')) throw new Error('Вставьте ссылку на конкретное видео YouTube.');
+            const embed = new URL('https://www.youtube.com/embed/' + id);
+            embed.searchParams.set('enablejsapi', '1');
+            embed.searchParams.set('autoplay', '0');
+            embed.searchParams.set('playsinline', '1');
+            embed.searchParams.set('origin', location.origin);
+            return embed.href;
+        }
+
+        async function addMusicTrack(url, title) {
+            const item = {
+                id: 'music_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+                type: 'music', title, url, volume: 0.5, x: 50, y: 50,
+                hidden: false, anim: 'anim-none',
+                playback: { paused: false, position: 0, updatedAt: Date.now(), commandId: String(Date.now()) }
+            };
+            const status = document.getElementById('music-status');
+            status.textContent = 'Отправка музыки в OBS…';
+            // Upload first, so a failed file upload leaves the current song playing.
+            try { await uploadMediaAsset(item); }
+            catch (error) { status.textContent = 'Не удалось загрузить файл: ' + error.message; return; }
+            const previous = activeOverlays.filter(track => track.type === 'music');
+            activeOverlays = activeOverlays.filter(track => track.type !== 'music');
+            activeOverlays.push(item);
+            renderOverlays();
+            const saved = await saveAndBroadcast();
+            if (saved !== true) {
+                activeOverlays = activeOverlays.filter(track => track.id !== item.id);
+                for (const track of previous) if (!activeOverlays.some(current => current.id === track.id)) activeOverlays.push(track);
+                renderOverlays();
+                status.textContent = 'Не удалось отправить музыку. Проверьте соединение.';
+            } else {
+                status.textContent = 'Трек отправлен в OBS. Это подтверждение отправки, а не воспроизведения на компьютере стримера.';
+            }
+            refreshMusicControls();
+        }
+
+        async function addMusicLink() {
+            const input = document.getElementById('music-url');
+            const status = document.getElementById('music-status');
+            try {
+                const url = new URL(input.value.trim());
+                if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Нужна ссылка HTTP или HTTPS.');
+                const youtubeUrl = youtubeMusicUrl(url);
+                if (youtubeUrl) { await addMusicTrack(youtubeUrl, 'YouTube: ' + new URL(youtubeUrl).pathname.split('/').pop()); return; }
+                const host = url.hostname.toLowerCase();
+                if (/(^|\.)(spotify\.com|spotify\.link|youtube\.com|youtu\.be|youtube-nocookie\.com|music\.yandex\.[a-z.]+|ya\.ru)$/.test(host)) {
+                    throw new Error('Это страница музыкального сервиса. Нужен аудиофайл или прямая ссылка на него.');
+                }
+                if (location.protocol === 'https:' && url.protocol !== 'https:') throw new Error('На этом сайте нужна HTTPS-ссылка.');
+                await addMusicTrack(url.href, decodeURIComponent(url.pathname.split('/').pop()) || 'Музыка по ссылке');
+            } catch (error) { status.textContent = error.message; }
+        }
+
+        async function addMusicFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const status = document.getElementById('music-status');
+            if (file.size > 4 * 1024 * 1024) {
+                status.textContent = 'Файл больше 4 МБ. Используйте прямую HTTPS-ссылку на аудио.';
+                event.target.value = '';
+                return;
+            }
+            try {
+                const url = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+                    reader.readAsDataURL(file);
+                });
+                await addMusicTrack(url, file.name);
+            } catch (error) { status.textContent = error.message; }
+            finally { event.target.value = ''; }
+        }
+
+        function controlMusic(id, action, value) {
+            const item = activeOverlays.find(track => track.id === id && track.type === 'music');
+            if (!item) return;
+            if (action === 'volume') item.volume = Math.max(0, Math.min(1, Number(value)));
+            else {
+                let position = playbackPosition(item.playback);
+                if (action === 'restart') position = 0;
+                item.playback = {
+                    position, paused: action === 'pause', updatedAt: Date.now(),
+                    commandId: Date.now() + '_' + Math.random().toString(36).slice(2)
+                };
+            }
+            renderOverlays();
+            saveAndBroadcast();
+            refreshMusicControls();
+        }
+
+        function applyMusicPlayback(node, item) {
+            if (isYoutubeMusic(item)) {
+                if (!document.body.classList.contains('obs-overlay-mode')) return;
+                applyOverlayPlayback(node, item);
+                const frame = node.querySelector('iframe');
+                if (frame && frame.dataset.playbackReady) {
+                    const volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.5)));
+                    youtubeCommand(frame, 'setVolume', [Math.round(volume * 100)]);
+                    youtubeCommand(frame, volume === 0 ? 'mute' : 'unMute');
+                }
+                return;
+            }
+            const audio = node.querySelector('audio[data-music]');
+            if (!audio) return;
+            const overlay = document.body.classList.contains('obs-overlay-mode');
+            audio.muted = !overlay;
+            audio.volume = Math.max(0, Math.min(1, Number(item.volume ?? 0.5)));
+            if (!audio.dataset.initialized) {
+                audio.dataset.initialized = 'true';
+                audio.addEventListener('loadedmetadata', () => {
+                    const current = activeOverlays.find(track => track.id === item.id);
+                    if (current) applyMusicPlayback(node, current);
+                });
+                audio.addEventListener('error', () => console.warn('Музыка: источник недоступен или формат не поддерживается'));
+            }
+            if (!overlay) { audio.pause(); return; }
+            const state = item.playback;
+            if (!state || audio.readyState < 1 || audio.dataset.command === state.commandId) return;
+            let position = playbackPosition(state);
+            if (Number.isFinite(audio.duration)) position = Math.min(position, audio.duration);
+            audio.currentTime = position;
+            audio.dataset.command = state.commandId;
+            if (state.paused) audio.pause();
+            else audio.play().catch(error => {
+                delete audio.dataset.command;
+                console.warn('OBS не запустил музыку:', error.message);
+            });
+        }
+
+        function refreshMusicControls() {
+            if (document.body.classList.contains('obs-overlay-mode')) return;
+            const list = document.getElementById('music-tracks');
+            if (!list) return;
+            const tracks = activeOverlays.filter(item => item.type === 'music');
+            for (const row of Array.from(list.children)) {
+                if (!tracks.some(item => item.id === row.dataset.musicId)) row.remove();
+            }
+            for (const item of tracks) {
+                let row = Array.from(list.children).find(row => row.dataset.musicId === item.id);
+                if (!row) {
+                    row = document.createElement('div');
+                    row.dataset.musicId = item.id;
+                    row.className = 'rounded-xl border border-slate-700 p-3 space-y-3';
+                    row.innerHTML = '<div data-title class="text-sm font-semibold break-words"></div><div data-state class="text-xs text-slate-400"></div>' +
+                        '<div class="flex flex-wrap gap-2"><button data-play class="bg-indigo-600 px-3 py-2 text-xs">Играть</button><button data-pause class="bg-slate-800 px-3 py-2 text-xs">Пауза</button><button data-restart class="bg-slate-800 px-3 py-2 text-xs">Сначала</button><button data-remove class="bg-slate-800 px-3 py-2 text-xs">Удалить</button></div>' +
+                        '<label class="block text-xs">Громкость <input data-volume type="range" min="0" max="1" step="0.01" class="w-full" aria-label="Громкость музыки"></label>';
+                    row.querySelector('[data-play]').onclick = () => controlMusic(item.id, 'play');
+                    row.querySelector('[data-pause]').onclick = () => controlMusic(item.id, 'pause');
+                    row.querySelector('[data-restart]').onclick = () => controlMusic(item.id, 'restart');
+                    row.querySelector('[data-remove]').onclick = () => { removeOverlayItem(item.id); refreshMusicControls(); };
+                    row.querySelector('[data-volume]').onchange = event => controlMusic(item.id, 'volume', event.target.value);
+                    list.appendChild(row);
+                }
+                row.querySelector('[data-title]').textContent = item.title || 'Музыка';
+                row.querySelector('[data-state]').textContent = item.playback?.paused ? 'Команда: пауза' : 'Команда: воспроизведение в OBS';
+                const slider = row.querySelector('[data-volume]');
+                if (document.activeElement !== slider) slider.value = String(item.volume ?? 0.5);
+            }
+        }
+        setInterval(refreshMusicControls, 1000);
+
         function switchControlTab(tab) {
             if (tab === 'accounts' && !accountAdminVerified) return;
-            ['text', 'image', 'video', 'links', 'widgets', 'awards', 'sounds', 'accounts'].forEach(t => {
+            ['text', 'image', 'video', 'links', 'widgets', 'awards', 'sounds', 'music', 'accounts'].forEach(t => {
                 const btn = document.getElementById(`tab-btn-${t}`);
                 const content = document.getElementById(`tab-content-${t}`);
                 if (!btn || !content) return;
