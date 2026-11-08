@@ -643,7 +643,7 @@
 
     <!-- ОКНО ДОБАВЛЕНИЯ ЛИЧНОГО ЗВУКА -->
     <div id="sound-builder-modal" class="hidden fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-        <div class="bg-obs-card border border-obs-border rounded-2xl w-full max-w-md p-6 shadow-2xl flex flex-col gap-5">
+        <div class="bg-obs-card border border-obs-border rounded-2xl w-full max-w-md p-6 shadow-2xl flex flex-col gap-5" style="max-height:90vh;overflow-y:auto">
             <div class="flex justify-between items-center border-b border-slate-800 pb-4">
                 <h3 class="text-base font-bold text-white flex items-center gap-2">
                     <i class="fa-solid fa-volume-high text-pink-400"></i> Добавить свой звук
@@ -660,6 +660,22 @@
                 <label class="block text-xs font-semibold text-slate-300 mb-1">Аудиофайл</label>
                 <input id="sound-file-input" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" onchange="previewSoundFile(event)" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs text-slate-300 file:bg-pink-600 file:text-white file:rounded-lg file:border-0 file:py-1 file:px-3 file:text-xs file:font-semibold cursor-pointer">
             </div>
+            <fieldset id="sound-trim-controls" disabled class="space-y-2">
+                <legend class="text-xs font-semibold mb-2">Обрезка звука</legend>
+                <label class="block text-xs">Начало, секунды
+                    <input id="sound-trim-start" type="number" min="0" step="0.01" value="0" oninput="updateSoundTrim('start',this.value)" class="w-full rounded-lg p-2 bg-slate-900 border border-slate-700">
+                    <input id="sound-trim-start-range" aria-label="Начало фрагмента" type="range" min="0" step="0.01" value="0" oninput="updateSoundTrim('start',this.value)" class="w-full">
+                </label>
+                <label class="block text-xs">Конец, секунды
+                    <input id="sound-trim-end" type="number" min="0" step="0.01" value="0" oninput="updateSoundTrim('end',this.value)" class="w-full rounded-lg p-2 bg-slate-900 border border-slate-700">
+                    <input id="sound-trim-end-range" aria-label="Конец фрагмента" type="range" min="0" step="0.01" value="0" oninput="updateSoundTrim('end',this.value)" class="w-full">
+                </label>
+                <div class="flex gap-2">
+                    <button type="button" onclick="playSoundTrimPreview()" class="rounded-lg bg-slate-700 px-3 py-2 text-xs">Прослушать фрагмент</button>
+                    <button type="button" onclick="stopSoundTrimPreview()" class="rounded-lg bg-slate-700 px-3 py-2 text-xs">Стоп</button>
+                </div>
+            </fieldset>
+            <p id="sound-trim-status" role="status" class="text-xs text-slate-400">Выберите файл, затем задайте начало и конец фрагмента.</p>
             <div>
                 <div class="flex justify-between items-center mb-1">
                     <label for="sound-volume-input" class="text-xs font-semibold text-slate-300">Громкость</label>
@@ -3474,6 +3490,14 @@
         }
 
         function closeSoundBuilderModal() {
+            ++soundTrimGeneration;
+            stopSoundTrimPreview();
+            soundTrimBuffer = null;
+            soundTrimFile = null;
+            soundTrimStart = soundTrimEnd = 0;
+            paintSoundTrimControls();
+            document.getElementById('sound-file-input').value = '';
+            document.getElementById('sound-trim-status').textContent = 'Выберите файл, затем задайте начало и конец фрагмента.';
             document.getElementById('sound-builder-modal').classList.add('hidden');
             if (soundPreviewAudio) {
                 soundPreviewAudio.pause();
@@ -3486,24 +3510,141 @@
             }
         }
 
-        function previewSoundFile(event) {
+        let soundTrimBuffer = null;
+        let soundTrimFile = null;
+        let soundTrimContext = null;
+        let soundTrimSource = null;
+        let soundTrimGain = null;
+        let soundTrimGeneration = 0;
+        let soundTrimStart = 0;
+        let soundTrimEnd = 0;
+
+        function stopSoundTrimPreview() {
+            if (soundTrimSource) {
+                try { soundTrimSource.stop(); } catch {}
+                soundTrimSource.disconnect();
+                soundTrimSource = null;
+            }
+            if (soundTrimGain) { soundTrimGain.disconnect(); soundTrimGain = null; }
+        }
+
+        function paintSoundTrimControls() {
+            const duration = soundTrimBuffer?.duration || 0;
+            document.getElementById('sound-trim-controls').disabled = !soundTrimBuffer;
+            for (const side of ['start', 'end']) {
+                const value = side === 'start' ? soundTrimStart : soundTrimEnd;
+                for (const suffix of ['', '-range']) {
+                    const input = document.getElementById('sound-trim-' + side + suffix);
+                    input.max = String(duration);
+                    input.value = String(value);
+                }
+            }
+            if (soundTrimBuffer) {
+                const bytes = 44 + (Math.ceil(soundTrimEnd * soundTrimBuffer.sampleRate) -
+                    Math.floor(soundTrimStart * soundTrimBuffer.sampleRate)) * soundTrimBuffer.numberOfChannels * 2;
+                document.getElementById('sound-trim-status').textContent =
+                    'Фрагмент: ' + (soundTrimEnd - soundTrimStart).toFixed(2) + ' с из ' +
+                    duration.toFixed(2) + ' с. Размер WAV: ' + (bytes / 1048576).toFixed(2) +
+                    ' МБ.' + (bytes > MAX_FIREBASE_MEDIA_BYTES ? ' Сократите фрагмент до 4 МБ.' : '');
+            }
+        }
+
+        function updateSoundTrim(side, raw) {
+            if (!soundTrimBuffer || raw === '' || !Number.isFinite(Number(raw))) return;
+            stopSoundTrimPreview();
+            const duration = soundTrimBuffer.duration;
+            const minimum = Math.min(0.01, duration);
+            if (side === 'start') soundTrimStart = Math.max(0, Math.min(Number(raw), soundTrimEnd - minimum));
+            else soundTrimEnd = Math.min(duration, Math.max(Number(raw), soundTrimStart + minimum));
+            paintSoundTrimControls();
+        }
+
+        async function playSoundTrimPreview() {
+            if (!soundTrimBuffer || !soundTrimContext) return;
+            stopSoundTrimPreview();
+            const context = soundTrimContext;
+            const generation = soundTrimGeneration;
+            try {
+                await context.resume();
+                if (generation !== soundTrimGeneration || context !== soundTrimContext) return;
+                stopSoundTrimPreview();
+                const source = context.createBufferSource();
+                const gain = context.createGain();
+                source.buffer = soundTrimBuffer;
+                gain.gain.value = Number(document.getElementById('sound-volume-input').value) / 100;
+                source.connect(gain).connect(context.destination);
+                soundTrimSource = source;
+                soundTrimGain = gain;
+                source.start(0, soundTrimStart, soundTrimEnd - soundTrimStart);
+                source.onended = () => {
+                    if (soundTrimSource === source) stopSoundTrimPreview();
+                };
+            } catch (error) { showToast('Не удалось прослушать фрагмент: ' + error.message, 'warning'); }
+        }
+
+        async function previewSoundFile(event) {
+            const generation = ++soundTrimGeneration;
             const file = event.target.files[0];
-            if (!file) return;
-            if (soundPreviewAudio) soundPreviewAudio.pause();
-            if (soundPreviewObjectUrl) URL.revokeObjectURL(soundPreviewObjectUrl);
-            soundPreviewObjectUrl = URL.createObjectURL(file);
-            soundPreviewAudio = new Audio(soundPreviewObjectUrl);
-            soundPreviewAudio.volume = Number(document.getElementById('sound-volume-input').value) / 100;
-            soundPreviewAudio.loop = true;
-            soundPreviewAudio.play().catch(error => {
-                console.error('Не удалось прослушать звук:', error);
-                showToast('Браузер не разрешил предпрослушивание звука', 'warning');
-            });
+            stopSoundTrimPreview();
+            soundTrimBuffer = null;
+            soundTrimFile = null;
+            soundTrimStart = soundTrimEnd = 0;
+            paintSoundTrimControls();
+            const status = document.getElementById('sound-trim-status');
+            if (!file) { status.textContent = 'Выберите аудиофайл.'; return; }
+            if (file.size > 32 * 1048576) { status.textContent = 'Для обрезки выберите файл до 32 МБ.'; return; }
+            status.textContent = 'Подготовка звука…';
+            try {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                if (!soundTrimContext) soundTrimContext = new AudioContextClass();
+                const buffer = await soundTrimContext.decodeAudioData(await file.arrayBuffer());
+                if (generation !== soundTrimGeneration) return;
+                if (!Number.isFinite(buffer.duration) || buffer.duration <= 0) throw new Error('Пустой аудиофайл');
+                soundTrimBuffer = buffer;
+                soundTrimFile = file;
+                soundTrimEnd = buffer.duration;
+                paintSoundTrimControls();
+            } catch (error) {
+                if (generation === soundTrimGeneration) status.textContent =
+                    'Не удалось прочитать звук. Попробуйте MP3 или WAV. ' + error.message;
+            }
+        }
+
+        function encodeSoundTrimWav(buffer, start, end) {
+            if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 ||
+                end > buffer.duration || end <= start) throw new Error('Укажите корректные начало и конец');
+            const first = Math.floor(start * buffer.sampleRate);
+            const last = Math.min(buffer.length, Math.ceil(end * buffer.sampleRate));
+            const frames = last - first;
+            const channels = buffer.numberOfChannels;
+            const bytes = 44 + frames * channels * 2;
+            if (frames <= 0) throw new Error('Выбран пустой фрагмент');
+            if (bytes > MAX_FIREBASE_MEDIA_BYTES) throw new Error('Фрагмент больше 4 МБ. Уменьшите его длительность.');
+            const data = new ArrayBuffer(bytes);
+            const view = new DataView(data);
+            const text = (offset, value) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
+            text(0, 'RIFF'); view.setUint32(4, bytes - 8, true); text(8, 'WAVE');
+            text(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+            view.setUint16(22, channels, true); view.setUint32(24, buffer.sampleRate, true);
+            view.setUint32(28, buffer.sampleRate * channels * 2, true);
+            view.setUint16(32, channels * 2, true); view.setUint16(34, 16, true);
+            text(36, 'data'); view.setUint32(40, bytes - 44, true);
+            const samples = Array.from({ length: channels }, (_, index) => buffer.getChannelData(index));
+            let offset = 44;
+            for (let frame = first; frame < last; frame++) {
+                for (let channel = 0; channel < channels; channel++) {
+                    const value = Math.max(-1, Math.min(1, samples[channel][frame]));
+                    view.setInt16(offset, Math.round(value * (value < 0 ? 32768 : 32767)), true);
+                    offset += 2;
+                }
+            }
+            return new Blob([data], { type: 'audio/wav' });
         }
 
         function onSoundPreviewVolumeChange(value) {
             document.getElementById('sound-volume-label').innerText = value + '%';
             if (soundPreviewAudio) soundPreviewAudio.volume = Number(value) / 100;
+            if (soundTrimGain) soundTrimGain.gain.value = Number(value) / 100;
         }
 
         async function loadModeratorSounds() {
@@ -3588,15 +3729,22 @@
             if (!ownerUid) return showToast('Сначала войдите в аккаунт модератора', 'warning');
             if (!file) return showToast('Выберите аудиофайл', 'warning');
 
-            if (file.size > MAX_FIREBASE_MEDIA_BYTES) {
-                return showToast('Аудиофайл больше 4 МБ. Уменьшите файл: Firebase Realtime Database не подходит для хранения больших медиа.', 'warning');
+            if (!soundTrimBuffer || soundTrimFile !== file) {
+                return showToast('Дождитесь подготовки выбранного звука', 'warning');
             }
 
             const button = document.querySelector('#sound-builder-modal button[onclick="saveCustomSound()"]');
             if (button?.disabled) return;
+            const generation = soundTrimGeneration;
+            const buffer = soundTrimBuffer;
+            const start = soundTrimStart, end = soundTrimEnd;
             if (button) button.disabled = true;
             try {
-                const url = await fileToDataUrl(file);
+                const fragment = encodeSoundTrimWav(buffer, start, end);
+                const url = await fileToDataUrl(fragment);
+                if (generation !== soundTrimGeneration || moderatorAuth?.uid !== ownerUid) {
+                    throw new Error('Файл или аккаунт изменён. Повторите сохранение.');
+                }
                 const id = 'sound_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
                 const sound = {
                     id,
