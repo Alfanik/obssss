@@ -251,6 +251,7 @@
                         <button id="tab-btn-widgets" onclick="switchControlTab('widgets')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-shapes text-amber-400"></i> Виджеты
                         </button>
+                        <button id="tab-btn-dances" onclick="switchControlTab('dances')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer"><i class="fa-solid fa-person"></i> Танцульки</button>
                         <button id="tab-btn-awards" onclick="switchControlTab('awards')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-trophy text-amber-400"></i> Премии
                         </button>
@@ -399,6 +400,14 @@
                         <button onclick="sendWebsiteOverlay()" class="w-full bg-sky-600 hover:bg-sky-500 rounded-xl p-3 text-sm font-bold cursor-pointer">Показать в оверлее</button>
                         <p class="text-xs text-slate-400">В предпросмотре нажми «Управлять сайтом», чтобы кликать и вводить текст. Для перемещения верни режим «Перемещать».</p>
                         <p class="text-xs text-amber-300">Некоторые сайты запрещают встраивание. Используй специальные ссылки для OBS/виджетов. Клики и ввод действуют только в пульте: общий чат или таймер должен синхронизироваться самим сервисом. Окно программы по ссылке не захватывается.</p>
+                    </div>
+                    <div id="tab-content-dances" class="space-y-3 hidden">
+                        <h2 class="text-sm font-bold">Танцульки</h2>
+                        <h3 class="text-xs font-semibold">Рыжеволосая героиня</h3>
+                        <div id="dance-local-preview" style="height:400px;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid #443744;border-radius:12px;background:repeating-conic-gradient(#27232b 0% 25%,#37313c 0% 50%) 0 0/24px 24px"></div>
+                        <p class="text-xs text-slate-400">Предпросмотр виден только вам. В эфир персонаж попадёт после нажатия кнопки ниже.</p>
+                        <button type="button" onclick="sendDancingCharacter()" class="w-full rounded-lg bg-indigo-600 p-3 text-sm font-bold">Запустить в OBS</button>
+                        <p class="text-xs text-slate-400">Танец повторяется по кругу. Размер меняется колесом в редакторе. Остановить персонажа можно в активных элементах: скрыть или удалить.</p>
                     </div>
                     <div id="tab-content-widgets" class="space-y-3 hidden">
                         <label class="block text-xs font-semibold text-slate-300 mb-1">Готовые виджеты для стрима</label>
@@ -2195,7 +2204,7 @@
         }
 
         function setupBackstageControls() {
-            for (const tab of ['text', 'image', 'video', 'links', 'widgets', 'awards']) {
+            for (const tab of ['text', 'image', 'video', 'links', 'widgets', 'dances', 'awards']) {
                 const panel = document.getElementById('tab-content-' + tab);
                 if (!panel || panel.querySelector('.stage-placement')) continue;
                 const controls = document.createElement('div');
@@ -2767,6 +2776,123 @@
             saveAndBroadcast();
             renderOverlays();
             showToast('Видео отправлено');
+        }
+
+        function buildDancingCharacter() {
+            // Native SVG timelines do not depend on CSS animation overrides in OBS.
+            const swing = (values, cx, cy) => '<animateTransform attributeName="transform" type="rotate" values="' + values.split(';').map(v => v + ' ' + cx + ' ' + cy).join(';') + '" dur="1.6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;.25;.5;.75;1" keySplines=".42 0 .58 1;.42 0 .58 1;.42 0 .58 1;.42 0 .58 1"/>';
+            return `<svg xmlns="http://www.w3.org/2000/svg" class="dell-dance-character" width="380" height="760" viewBox="0 0 380 760" role="img" aria-label="Рыжеволосая героиня в рубашке и галстуке танцует" style="display:block;overflow:visible">
+            <ellipse cx="190" cy="727" rx="96" ry="15" fill="#080b16" opacity=".12"/>
+            <ellipse cx="190" cy="727" rx="69" ry="9" fill="#080b16" opacity=".2">
+                <animate attributeName="rx" values="69;59;69;59;69" dur="1.6s" repeatCount="indefinite"/>
+            </ellipse>
+            <g stroke="#29282e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <g>
+                <animateTransform attributeName="transform" type="translate" values="-9 0;0 -9;9 0;0 -9;-9 0" dur="1.6s" repeatCount="indefinite"/>
+                <g>
+                  ${swing('-5;0;5;0;-5',190,414)}
+                  <!-- Long trousers and alternating steps: adult proportions. -->
+                  <g>
+                    ${swing('8;-5;-9;3;8',166,411)}
+                    <path d="M143 405 Q164 397 188 416 L184 525 173 615 173 697 142 700 133 612 133 519Z" fill="#262e31"/>
+                    <path d="M157 453L150 532 158 605M143 621L155 669M166 683L144 687" fill="none" stroke="#111b20" stroke-width="2"/>
+                    <path d="M143 689L172 689 181 714Q180 730 147 730L130 723Q130 708 143 689Z" fill="#76503b"/>
+                    <path d="M134 711Q153 704 177 714M132 723Q159 734 180 721" fill="none" stroke="#302a29"/>
+                    <path d="M145 700L166 702M144 705L168 707" stroke="#c29972" stroke-width="2"/>
+                  </g>
+                  <g>
+                    ${swing('-9;3;8;-5;-9',213,411)}
+                    <path d="M187 414Q210 397 237 408L245 518 229 609 225 699 194 700 190 609 189 530Z" fill="#30383a"/>
+                    <path d="M219 451L228 519 208 607M218 627L207 677M198 686L221 688" fill="none" stroke="#162025" stroke-width="2"/>
+                    <path d="M195 691L224 691 239 716Q242 731 211 733L191 726Q187 710 195 691Z" fill="#80583f"/>
+                    <path d="M192 712Q214 706 235 716M191 725Q219 737 239 723" fill="none" stroke="#302a29"/>
+                    <path d="M198 702L220 703M198 707L223 708" stroke="#c29972" stroke-width="2"/>
+                  </g>
+                  <!-- Braided ponytail behind the shoulder. -->
+                  <g>
+                    ${swing('12;-10;-14;8;12',218,122)}
+                    <path d="M213 119Q255 157 242 207L231 232 247 246 228 261 241 274 218 290 228 306 207 318 210 294 198 279 215 259 202 243 221 225Q234 175 205 143Z" fill="#b96857"/>
+                    <path d="M218 156Q242 199 225 225M222 239L233 247M217 264L228 273M211 287L218 295" fill="none" stroke="#804d4d" stroke-width="2"/>
+                  </g>
+                  <!-- Shirt, collar, and waist. -->
+                  <path d="M153 184L171 174 205 174 225 186Q247 195 243 239L228 308 237 404Q190 424 141 403L147 310 133 240Q125 202 153 184Z" fill="#eeeede"/>
+                  <path d="M148 233L158 294 151 367 172 391M226 239L215 285 229 370 207 393M169 216L156 227M207 214L220 225M151 399L173 405M204 404L232 398" fill="none" stroke="#92988a" stroke-width="3"/>
+                  <path d="M174 161L173 186 189 204 208 185 204 159" fill="#f3d9c3"/>
+                  <path d="M171 178L188 200 174 219 156 192ZM207 177L190 200 205 219 224 192Z" fill="#faf8e9"/>
+                  <path d="M144 404Q188 414 237 404L237 423Q190 438 143 422Z" fill="#192226"/>
+                  <path d="M181 413H200V424H181Z" fill="#626b69" stroke-width="2"/>
+                  <!-- Arms swing at shoulders; forearms bend at elbows. -->
+                  <g>
+                    ${swing('20;-28;-40;-5;20',146,205)}
+                    <path d="M143 192Q123 195 119 221L108 287 134 294 158 227Q164 202 143 192Z" fill="#e5e7d8"/>
+                    <path d="M126 222L118 275M114 282L130 286" fill="none" stroke="#9ba18f" stroke-width="2"/>
+                    <g>
+                      ${swing('-65;-90;-40;-30;-65',121,287)}
+                      <path d="M109 279L133 280 139 344 116 349Z" fill="#eeefdf"/>
+                      <path d="M114 337L139 333 142 350 116 355Z" fill="#fcf8e9"/>
+                      <path d="M119 354L137 351Q150 366 139 381Q133 389 125 383L117 373Z" fill="#f3d9c3"/>
+                      <path d="M126 360L134 371M121 366L128 378" fill="none" stroke="#c68f7c" stroke-width="1.5"/>
+                    </g>
+                  </g>
+                  <g>
+                    ${swing('-40;-5;20;-28;-40',233,205)}
+                    <path d="M230 192Q250 194 254 220L267 285 242 296 219 227Q213 201 230 192Z" fill="#ececdd"/>
+                    <path d="M244 221L256 275M246 285L262 280" fill="none" stroke="#9ba18f" stroke-width="2"/>
+                    <g>
+                      ${swing('40;30;65;90;40',254,286)}
+                      <path d="M242 280L265 279 262 347 238 344Z" fill="#e8eadb"/>
+                      <path d="M239 334L264 339 262 355 237 350Z" fill="#faf7e9"/>
+                      <path d="M240 352L258 355 260 373Q254 390 244 382L235 366Z" fill="#f3d9c3"/>
+                      <path d="M247 361L244 374M254 365L251 379" fill="none" stroke="#c68f7c" stroke-width="1.5"/>
+                    </g>
+                  </g>
+                  <g>
+                    ${swing('12;-9;-12;9;12',189,216)}
+                    <path d="M181 202L198 202 202 217 190 230 178 216Z" fill="#172428"/>
+                    <path d="M185 226L196 226 205 363 191 380 178 365Z" fill="#172428"/>
+                    <path d="M188 238L186 347" stroke="#3c4b4c" stroke-width="2"/>
+                  </g>
+                  <!-- Full-size head: copper hair, amber ringed eyes, quiet smile. -->
+                  <g>
+                    ${swing('5;-3;-5;3;5',189,167)}
+                    <path d="M138 116Q119 64 148 32 177 8 214 29 247 48 237 112L222 167 204 183 151 164Z" fill="#ad6156"/>
+                    <path d="M145 89Q139 126 155 149L184 174Q190 178 198 172L224 148Q237 121 228 81L190 51Z" fill="#f5ddc8"/>
+                    <path d="M145 109Q133 103 138 124L150 134M228 109Q241 104 235 123L227 134" fill="#f2d1bb"/>
+                    <path d="M138 111Q124 59 153 32 184 9 215 29 243 46 236 103L226 126 221 83 209 64 208 91 197 68 190 90 180 64 174 91 166 65 156 96 147 93 151 172 140 157Z" fill="#c47b66"/>
+                    <path d="M151 43Q136 65 142 94M166 35L156 77M181 30L174 72M198 32L199 67M213 42L225 82M148 127L150 154" fill="none" stroke="#8c514c" stroke-width="2"/>
+                    <path d="M156 106Q166 101 176 105M202 104Q213 101 221 107" fill="none" stroke="#815448" stroke-width="2"/>
+                    <path d="M154 115Q165 104 178 114Q168 126 155 118M201 114Q212 104 223 115Q212 126 201 118" fill="#fff9e9" stroke-width="2"/>
+                    <circle cx="167" cy="115" r="6.5" fill="#d4a246" stroke="#805b2e" stroke-width="1.5"/>
+                    <circle cx="213" cy="115" r="6.5" fill="#d4a246" stroke="#805b2e" stroke-width="1.5"/>
+                    <circle cx="167" cy="115" r="3" fill="none" stroke="#69492c" stroke-width="1"/>
+                    <circle cx="213" cy="115" r="3" fill="none" stroke="#69492c" stroke-width="1"/>
+                    <circle cx="169" cy="113" r="1.8" fill="white" stroke="none"/><circle cx="215" cy="113" r="1.8" fill="white" stroke="none"/>
+                    <path d="M190 117L186 134 191 136" fill="none" stroke="#c5927c" stroke-width="1.5"/>
+                    <path d="M180 149Q190 154 201 147" fill="none" stroke="#a16660" stroke-width="2"/>
+                    <path d="M222 91Q237 142 212 195L211 169Q226 125 216 100Z" fill="#c47b66"/>
+                  </g>
+                </g>
+              </g>
+            </g></svg>`;
+        }
+
+        function sendDancingCharacter() {
+            const item = {
+                id: 'dance_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+                type: 'widget', title: 'Танец рыжеволосой героини',
+                html: buildDancingCharacter(), width: '380px', height: '760px',
+                anim: 'anim-none', scale: 0.8, x: 78, y: 62, hidden: false
+            };
+            addVisualOverlay(item, 'dances');
+            renderOverlays();
+            saveAndBroadcast().then(saved => {
+                if (saved) showToast('Танец отправлен в OBS');
+                else {
+                    activeOverlays = activeOverlays.filter(current => current.id !== item.id);
+                    renderOverlaysSmart();
+                    showToast('Не удалось отправить танец в OBS', 'warning');
+                }
+            });
         }
 
         function sendWidget(kind) {
@@ -5125,9 +5251,22 @@
         }
         setInterval(refreshMusicControls, 1000);
 
+        function previewDancingCharacter() {
+            const preview = document.getElementById('dance-local-preview');
+            if (!preview || preview.childElementCount) return;
+            preview.innerHTML = buildDancingCharacter();
+            const svg = preview.querySelector('svg');
+            if (svg) {
+                svg.style.width = 'auto';
+                svg.style.height = '380px';
+                svg.style.maxWidth = '100%';
+            }
+        }
+
         function switchControlTab(tab) {
+            if (tab === 'dances') previewDancingCharacter();
             if (tab === 'accounts' && !accountAdminVerified) return;
-            ['text', 'image', 'video', 'links', 'widgets', 'awards', 'sounds', 'music', 'accounts'].forEach(t => {
+            ['text', 'image', 'video', 'links', 'widgets', 'dances', 'awards', 'sounds', 'music', 'accounts'].forEach(t => {
                 const btn = document.getElementById(`tab-btn-${t}`);
                 const content = document.getElementById(`tab-content-${t}`);
                 if (!btn || !content) return;
