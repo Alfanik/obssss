@@ -1560,6 +1560,7 @@
                 return;
             }
             if (!isOverlay) {
+                await loadModeratorHistory();
                 try {
                     await loadCustomWidgets();
                     await loadModeratorWidgets();
@@ -1805,7 +1806,182 @@
             throw new Error('Общий оверлей часто меняется. Повторите сохранение через секунду.');
         }
 
+        let moderatorHistory = {};
+        let historyOwnerUid = '';
+        let historyPending = new Map();
+        let historyWriteTimer = 0;
+        let historyWriting = false;
+        const historyFingerprints = new Map();
+
+        function historyUrl(uid, id = '') {
+            return FIREBASE_ASSETS_URL + '/moderator_history_' + encodeURIComponent(uid) +
+                (id ? '/' + encodeURIComponent(id) : '') + '.json';
+        }
+
+        function cacheModeratorHistory() {
+            try { localStorage.setItem('obs_history_' + historyOwnerUid, JSON.stringify(moderatorHistory)); }
+            catch (error) { console.warn('Кеш истории недоступен:', error); }
+        }
+
+        function renderModeratorHistory(message = '') {
+            if (!historyOwnerUid || document.body.classList.contains('obs-overlay-mode')) return;
+            let panel = document.getElementById('moderator-element-history');
+            if (!panel) {
+                const list = document.getElementById('active-elements-list');
+                if (!list) return;
+                panel = document.createElement('details');
+                panel.id = 'moderator-element-history';
+                panel.className = 'mt-4 border border-slate-700 rounded-xl p-3';
+                list.insertAdjacentElement('afterend', panel);
+            }
+            panel.replaceChildren();
+            const summary = document.createElement('summary');
+            const entries = Object.values(moderatorHistory).filter(entry => entry && entry.item)
+                .sort((a, b) => b.savedAt - a.savedAt);
+            summary.textContent = 'Моя история элементов (' + entries.length + ')';
+            summary.className = 'cursor-pointer text-sm font-bold';
+            panel.appendChild(summary);
+            const status = document.createElement('p');
+            status.className = 'text-xs text-slate-400 my-2';
+            status.textContent = message || 'Сохранено для аккаунта. Добавление из истории выводит элемент в общий оверлей.';
+            panel.appendChild(status);
+            if (historyPending.size) {
+                const retry = document.createElement('button');
+                retry.type = 'button';
+                retry.textContent = 'Повторить сохранение истории';
+                retry.onclick = () => void flushModeratorHistory();
+                panel.appendChild(retry);
+            }
+            for (const entry of entries) {
+                const row = document.createElement('div');
+                row.className = 'flex items-center justify-between gap-2 py-2 border-t border-slate-700 text-xs';
+                const label = document.createElement('span');
+                label.className = 'min-w-0 truncate';
+                label.textContent = entry.item.title || (typeof entry.item.content === 'string' && entry.item.content) || entry.item.type;
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'shrink-0 px-3 py-2 rounded-lg bg-indigo-600';
+                button.textContent = 'Добавить снова';
+                button.onclick = async () => {
+                    button.disabled = true;
+                    try { await restoreHistoryItem(entry.item.id); }
+                    catch (error) { showToast('Не удалось добавить из истории: ' + error.message, 'warning'); }
+                    finally { button.disabled = false; }
+                };
+                row.append(label, button);
+                panel.appendChild(row);
+            }
+        }
+
+        async function loadModeratorHistory() {
+            const uid = moderatorAuth?.uid;
+            if (!uid) return;
+            historyOwnerUid = uid;
+            moderatorHistory = {};
+            historyFingerprints.clear();
+            try {
+                const cached = JSON.parse(localStorage.getItem('obs_history_' + uid) || '{}');
+                if (cached && typeof cached === 'object' && !Array.isArray(cached)) moderatorHistory = cached;
+            } catch {}
+            renderModeratorHistory('Загрузка истории аккаунта…');
+            try {
+                const response = await firebaseFetch(historyUrl(uid), { cache: 'no-store' });
+                if (!response.ok) throw await getFirebaseError(response);
+                const saved = await response.json();
+                if (moderatorAuth?.uid !== uid) return;
+                // Merge by item, keeping newer cached records after an offline save.
+                for (const [id, entry] of Object.entries(saved || {})) {
+                    if (!entry?.item) continue;
+                    if (!moderatorHistory[id] || entry.savedAt >= moderatorHistory[id].savedAt) moderatorHistory[id] = entry;
+                }
+                for (const [id, entry] of Object.entries(moderatorHistory)) {
+                    if (!entry?.item) continue;
+                    if (!saved?.[id] || entry.savedAt > saved[id].savedAt) historyPending.set(id, entry);
+                    else historyFingerprints.set(id, JSON.stringify(entry.item));
+                }
+                cacheModeratorHistory();
+                renderModeratorHistory();
+                if (historyPending.size) void flushModeratorHistory();
+            } catch (error) {
+                renderModeratorHistory('Облачная история недоступна. Показан кеш этого аккаунта: ' + error.message);
+            }
+        }
+
+        function rememberModeratorElement(item) {
+            if (!historyOwnerUid || moderatorAuth?.uid !== historyOwnerUid ||
+                document.body.classList.contains('obs-overlay-mode')) return;
+            const clean = JSON.parse(JSON.stringify(serializeOverlayForCloud(item)));
+            const fingerprint = JSON.stringify(clean);
+            if (historyFingerprints.get(item.id) === fingerprint) return;
+            historyFingerprints.set(item.id, fingerprint);
+            const entry = { item: clean, savedAt: Date.now() };
+            moderatorHistory[item.id] = entry;
+            // Retain inline media until its existing asset upload has completed.
+            historyPending.set(item.id, { ...entry, source: { ...item } });
+            cacheModeratorHistory();
+            renderModeratorHistory('Сохранение истории…');
+            clearTimeout(historyWriteTimer);
+            historyWriteTimer = setTimeout(() => void flushModeratorHistory(), 250);
+        }
+
+        async function flushModeratorHistory() {
+            if (historyWriting || !historyPending.size) return;
+            const uid = historyOwnerUid;
+            if (!uid || moderatorAuth?.uid !== uid) return;
+            historyWriting = true;
+            let failed = false;
+            try {
+                for (const [id, pending] of historyPending) {
+                    if (moderatorAuth?.uid !== uid) break;
+                    if (pending.source) await uploadMediaAsset(pending.source);
+                    const entry = { item: pending.item, savedAt: pending.savedAt };
+                    const response = await firebaseFetch(historyUrl(uid, id), {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(entry)
+                    });
+                    if (!response.ok) throw await getFirebaseError(response);
+                    if (historyPending.get(id) === pending) historyPending.delete(id);
+                }
+            } catch (error) {
+                failed = true;
+                console.error('История не сохранена в облако:', error);
+                renderModeratorHistory('Не удалось сохранить историю в облаке: ' + error.message);
+            } finally {
+                historyWriting = false;
+                if (!failed) renderModeratorHistory();
+            }
+        }
+
+        async function restoreHistoryItem(id) {
+            const entry = moderatorHistory[id];
+            if (!entry?.item) return;
+            const item = JSON.parse(JSON.stringify(entry.item));
+            if (item.assetKey && !item.url) {
+                const response = await firebaseFetch(FIREBASE_ASSETS_URL + '/' + encodeURIComponent(item.assetKey) + '.json', { cache: 'force-cache' });
+                if (!response.ok) throw await getFirebaseError(response);
+                item.url = await response.json();
+                if (typeof item.url !== 'string') throw new Error('Медиафайл недоступен');
+            }
+            if (item.type === 'music') { await addMusicTrack(item.url, item.title); return; }
+            if (item.type === 'shared-timer') {
+                if (activeOverlays.some(current => current.id === 'shared_stream_timer')) {
+                    showToast('Общий таймер уже добавлен', 'warning'); return;
+                }
+                item.id = 'shared_stream_timer';
+                item.content.endsAt = null;
+            } else item.id = 'history_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            item.hidden = false;
+            if (item.playback) item.playback = { ...item.playback, paused: false, position: 0, updatedAt: Date.now(), commandId: item.id };
+            addVisualOverlay(item);
+            renderOverlays();
+            if (item.type === 'text') liveTextItemId = item.id;
+            if (!await saveAndBroadcast()) throw new Error('Проверьте подключение');
+        }
+
         function saveAndBroadcast() {
+            for (const item of activeOverlays) {
+                if (moderatorHistory[item.id]) rememberModeratorElement(item);
+            }
             const mutationVersion = ++overlayMutationVersion;
             const snapshot = activeOverlays.map(item => {
                 if (typeof item.url === 'string' && item.url.startsWith('data:')) item.assetKey = item.assetKey || item.id;
@@ -1839,6 +2015,70 @@
         }
 
         // Keep only the newest unsent update; never let requests for one item overtake each other.
+        const motionCapture = new Map();
+        const remoteMotion = new Map();
+
+        function captureMotion(item, fields) {
+            if (!Number.isFinite(fields?.x) && !Number.isFinite(fields?.y)) return null;
+            const previous = motionCapture.get(item.id) || [];
+            const last = previous[previous.length - 1];
+            const t = Math.max(Date.now(), (last?.t || 0) + 1);
+            const sample = { t, x: item.x, y: item.y, scale: item.scale || 1,
+                stretchX: item.stretchX || 1, stretchY: item.stretchY || 1 };
+            const samples = previous.filter(point => t - point.t < 2400).slice(-47);
+            samples.push(sample);
+            motionCapture.set(item.id, samples);
+            return samples;
+        }
+
+        function receiveMotion(item, raw) {
+            if (!Array.isArray(raw) || !raw.length) return false;
+            const samples = raw.slice(-48).filter(point => point &&
+                ['t', 'x', 'y', 'scale', 'stretchX', 'stretchY'].every(key => Number.isFinite(point[key])))
+                .map(point => ({ ...point })).sort((a, b) => a.t - b.t);
+            if (!samples.length) return false;
+            const last = samples[samples.length - 1];
+            const now = Date.now();
+            let track = remoteMotion.get(item.id);
+            if (track && last.t <= track.lastTimestamp) return false;
+            if (!track || now - track.receivedAt > 4000) {
+                track = { points: [], offset: now - last.t, delay: 350, playhead: -Infinity,
+                    receivedAt: now, lastTimestamp: -Infinity };
+                const first = samples[0];
+                track.points.push({ ...first, t: first.t - 50, x: item.x, y: item.y,
+                    scale: item.scale || 1, stretchX: item.stretchX || 1, stretchY: item.stretchY || 1 });
+            } else {
+                // Buffer the measured packet interval instead of stopping at each HTTP response.
+                const interval = now - track.receivedAt;
+                track.delay = Math.min(1200, Math.max(350, interval * 1.25, track.delay * 0.97));
+                track.offset = Math.min(track.offset, now - last.t);
+            }
+            for (const point of samples) {
+                if (point.t > track.lastTimestamp) track.points.push(point);
+            }
+            track.points = track.points.slice(-96);
+            track.lastTimestamp = last.t;
+            track.receivedAt = now;
+            track.finished = false;
+            remoteMotion.set(item.id, track);
+            return true;
+        }
+
+        function sampleRemoteMotion(id, now = Date.now()) {
+            const track = remoteMotion.get(id);
+            if (!track || track.finished) return null;
+            track.playhead = Math.max(track.playhead, now - track.offset - track.delay);
+            const points = track.points;
+            while (points.length > 2 && points[1].t <= track.playhead) points.shift();
+            const a = points[0], b = points[1] || a;
+            const amount = Math.max(0, Math.min(1, (track.playhead - a.t) / Math.max(1, b.t - a.t)));
+            const pose = {};
+            for (const key of ['x', 'y', 'scale', 'stretchX', 'stretchY']) pose[key] = a[key] + (b[key] - a[key]) * amount;
+            const waiting = track.playhead < track.lastTimestamp;
+            if (!waiting) track.finished = true;
+            return { pose, waiting };
+        }
+
         const fastUpdateQueues = new Map();
         function sendFastUpdate(item, fields) {
             let queue = fastUpdateQueues.get(item.id);
@@ -1849,6 +2089,8 @@
             queue.pending = { ...queue.pending, x: item.x, y: item.y,
                 scale: item.scale || 1, stretchX: item.stretchX || 1,
                 stretchY: item.stretchY || 1, ...fields, updatedAt: Date.now() };
+            const motion = captureMotion(item, fields);
+            if (motion) queue.pending.motion = motion;
             if (queue.sending) return;
             queue.sending = true;
             const flush = async () => {
@@ -1913,6 +2155,7 @@
                     id === resizeOverlayTargetId && isResizingOverlay ||
                     wheelSaveTimers.has(id)) continue;
                 if (typeof update.updatedAt === 'number' && Date.now() - update.updatedAt > 15000) continue;
+                if (receiveMotion(item, update.motion)) changed = true;
                 for (const field of ['x', 'y', 'scale', 'stretchX', 'stretchY', 'volume']) {
                     if (field === 'volume' && (videoVolumeSaveTimer !== null || cloudWritesPending > 0)) continue;
                     if (Number.isFinite(update[field]) && item[field] !== update[field]) {
@@ -2044,6 +2287,7 @@
                 item.anim = 'anim-none';
             }
             activeOverlays.push(item);
+            rememberModeratorElement(item);
         }
 
         function setupBackstageControls() {
@@ -3430,6 +3674,7 @@
             const rect = frame && frame.getBoundingClientRect();
             if (!dragItem || !rect || !rect.width || !rect.height) return;
             dragSession = { item: dragItem, rect, node: e.currentTarget };
+            remoteMotion.delete(itemId);
             lastDragBroadcastAt = 0;
             e.preventDefault();
             if (e.currentTarget && e.currentTarget.setPointerCapture && e.pointerId !== undefined) {
@@ -3969,19 +4214,23 @@
                         continue;
                     }
                     const interactive = element.parentElement.id === 'operator-overlay-canvas';
+                    const localControl = interactive && ((isDragging && dragTargetId === pose.id) ||
+                        (isResizingOverlay && resizeOverlayTargetId === pose.id) || wheelSaveTimers.has(pose.id));
+                    const motion = localControl ? null : sampleRemoteMotion(pose.id);
+                    const target = motion ? { ...pose, ...motion.pose } : pose;
                     const previous = element._displayPose;
                     const dt = previous ? Math.min(64, Math.max(1, timestamp - previous.time)) : 16;
-                    const blend = interactive || !previous ? 1 : 1 - Math.exp(-dt / 110);
-                    const display = { ...pose, time: timestamp };
+                    const blend = localControl || !previous || (interactive && !motion) ? 1 : 1 - Math.exp(-dt / (motion ? 24 : 110));
+                    const display = { ...target, time: timestamp };
                     let settled = true;
                     for (const key of ['x', 'y', 'scale', 'stretchX', 'stretchY']) {
-                        const gap = previous ? pose[key] - previous[key] : 0;
+                        const gap = previous ? target[key] - previous[key] : 0;
                         const tolerance = key === 'x' || key === 'y' ? 0.015 : 0.0005;
-                        display[key] = Math.abs(gap) <= tolerance ? pose[key] : previous[key] + gap * blend;
-                        if (Math.abs(display[key] - pose[key]) > tolerance) settled = false;
+                        display[key] = Math.abs(gap) <= tolerance ? target[key] : previous[key] + gap * blend;
+                        if (Math.abs(display[key] - target[key]) > tolerance) settled = false;
                     }
                     element._displayPose = display;
-                    if (interactive || settled) pendingOverlayTransforms.delete(element);
+                    if (!motion?.waiting && (localControl || settled)) pendingOverlayTransforms.delete(element);
                     updateStagedScene(element, display, size);
                     if (interactive && element.classList.contains('draggable-item')) {
                         let grip = element.querySelector('[data-stage-grip]');
@@ -4840,6 +5089,7 @@
                 renderOverlays();
                 status.textContent = 'Не удалось отправить музыку. Проверьте соединение.';
             } else {
+                rememberModeratorElement(item);
                 status.textContent = 'Трек отправлен в OBS. Это подтверждение отправки, а не воспроизведения на компьютере стримера.';
             }
             refreshMusicControls();
