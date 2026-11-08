@@ -1806,188 +1806,78 @@
             throw new Error('Общий оверлей часто меняется. Повторите сохранение через секунду.');
         }
 
-        let moderatorHistory = {};
-        let historyOwnerUid = '';
-        let historyPending = new Map();
-        let historyWriteTimer = 0;
-        let historyWriting = false;
-        const historyFingerprints = new Map();
-
-        function historyUrl(uid, id = '') {
-            return FIREBASE_ASSETS_URL + '/moderator_history_' + encodeURIComponent(uid) +
-                (id ? '/' + encodeURIComponent(id) : '') + '.json';
+        function renderModeratorHistory() {
+            document.getElementById('moderator-element-history')?.remove();
         }
 
-        function cacheModeratorHistory() {
-            try { localStorage.setItem('obs_history_' + historyOwnerUid, JSON.stringify(moderatorHistory)); }
-            catch (error) { console.warn('Кеш истории недоступен:', error); }
+        let savedActiveSnapshot = null;
+        let restoreActiveSnapshot = false;
+        let activeSnapshotVersion = 0;
+
+        function activeSnapshotUrl(uid) {
+            return FIREBASE_ASSETS_URL + '/moderator_active_' + encodeURIComponent(uid) + '.json';
         }
 
-        function renderModeratorHistory(message = '') {
-            if (!historyOwnerUid || document.body.classList.contains('obs-overlay-mode')) return;
-            let panel = document.getElementById('moderator-element-history');
-            if (!panel) {
-                const list = document.getElementById('active-elements-list');
-                if (!list) return;
-                panel = document.createElement('details');
-                panel.id = 'moderator-element-history';
-                panel.className = 'mt-4 border border-slate-700 rounded-xl p-3';
-                list.insertAdjacentElement('afterend', panel);
-            }
-            panel.replaceChildren();
-            const summary = document.createElement('summary');
-            const entries = Object.values(moderatorHistory).filter(entry => entry && entry.item)
-                .sort((a, b) => b.savedAt - a.savedAt);
-            summary.textContent = 'Моя история элементов (' + entries.length + ')';
-            summary.className = 'cursor-pointer text-sm font-bold';
-            panel.appendChild(summary);
-            const status = document.createElement('p');
-            status.className = 'text-xs text-slate-400 my-2';
-            status.textContent = message || 'Сохранено для аккаунта. Добавление из истории выводит элемент в общий оверлей.';
-            panel.appendChild(status);
-            if (historyPending.size) {
-                const retry = document.createElement('button');
-                retry.type = 'button';
-                retry.textContent = 'Повторить сохранение истории';
-                retry.onclick = () => void flushModeratorHistory();
-                panel.appendChild(retry);
-            }
-            for (const entry of entries) {
-                const row = document.createElement('div');
-                row.className = 'flex items-center justify-between gap-2 py-2 border-t border-slate-700 text-xs';
-                const label = document.createElement('span');
-                label.className = 'min-w-0 truncate';
-                label.textContent = entry.item.title || (typeof entry.item.content === 'string' && entry.item.content) || entry.item.type;
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'shrink-0 px-3 py-2 rounded-lg bg-indigo-600';
-                button.textContent = 'Добавить снова';
-                button.onclick = async () => {
-                    button.disabled = true;
-                    try { await restoreHistoryItem(entry.item.id); }
-                    catch (error) { showToast('Не удалось добавить из истории: ' + error.message, 'warning'); }
-                    finally { button.disabled = false; }
-                };
-                row.append(label, button);
-                panel.appendChild(row);
-            }
+        function cacheActiveSnapshot(record, uid = moderatorAuth?.uid) {
+            if (!uid) return;
+            try { localStorage.setItem('obs_active_' + uid, JSON.stringify(record)); }
+            catch (error) { console.warn('Не удалось сохранить локальный список:', error); }
         }
 
         async function loadModeratorHistory() {
             const uid = moderatorAuth?.uid;
             if (!uid) return;
-            historyOwnerUid = uid;
-            moderatorHistory = {};
-            historyFingerprints.clear();
+            renderModeratorHistory();
+            let cached = null;
+            try { cached = JSON.parse(localStorage.getItem('obs_active_' + uid) || 'null'); } catch {}
             try {
-                const cached = JSON.parse(localStorage.getItem('obs_history_' + uid) || '{}');
-                if (cached && typeof cached === 'object' && !Array.isArray(cached)) moderatorHistory = cached;
-            } catch {}
-            renderModeratorHistory('Загрузка истории аккаунта…');
-            try {
-                const response = await firebaseFetch(historyUrl(uid), { cache: 'no-store' });
+                const response = await firebaseFetch(activeSnapshotUrl(uid), { cache: 'no-store' });
                 if (!response.ok) throw await getFirebaseError(response);
-                const saved = await response.json();
+                const remote = await response.json();
                 if (moderatorAuth?.uid !== uid) return;
-                // Merge by item, keeping newer cached records after an offline save.
-                for (const [id, entry] of Object.entries(saved || {})) {
-                    if (!entry?.item) continue;
-                    if (!moderatorHistory[id] || entry.savedAt >= moderatorHistory[id].savedAt) moderatorHistory[id] = entry;
-                }
-                for (const [id, entry] of Object.entries(moderatorHistory)) {
-                    if (!entry?.item) continue;
-                    if (!saved?.[id] || entry.savedAt > saved[id].savedAt) historyPending.set(id, entry);
-                    else historyFingerprints.set(id, JSON.stringify(entry.item));
-                }
-                cacheModeratorHistory();
-                renderModeratorHistory();
-                if (historyPending.size) void flushModeratorHistory();
+                const record = cached?.dirty ? cached : remote || cached;
+                savedActiveSnapshot = record && (Array.isArray(record.items) || Number.isFinite(record.savedAt))
+                    ? normalizeCloudOverlayList(record.items) : null;
             } catch (error) {
-                renderModeratorHistory('Облачная история недоступна. Показан кеш этого аккаунта: ' + error.message);
+                savedActiveSnapshot = cached && Array.isArray(cached.items)
+                    ? normalizeCloudOverlayList(cached.items) : null;
+                showToast('Не удалось загрузить список аккаунта из Firebase: ' + error.message, 'warning');
             }
+            restoreActiveSnapshot = savedActiveSnapshot !== null;
         }
 
-        function rememberModeratorElement(item) {
-            if (!historyOwnerUid || moderatorAuth?.uid !== historyOwnerUid ||
-                document.body.classList.contains('obs-overlay-mode')) return;
-            const clean = JSON.parse(JSON.stringify(serializeOverlayForCloud(item)));
-            const fingerprint = JSON.stringify(clean);
-            if (historyFingerprints.get(item.id) === fingerprint) return;
-            historyFingerprints.set(item.id, fingerprint);
-            const entry = { item: clean, savedAt: Date.now() };
-            moderatorHistory[item.id] = entry;
-            // Retain inline media until its existing asset upload has completed.
-            historyPending.set(item.id, { ...entry, source: { ...item } });
-            cacheModeratorHistory();
-            renderModeratorHistory('Сохранение истории…');
-            clearTimeout(historyWriteTimer);
-            historyWriteTimer = setTimeout(() => void flushModeratorHistory(), 250);
-        }
-
-        async function flushModeratorHistory() {
-            if (historyWriting || !historyPending.size) return;
-            const uid = historyOwnerUid;
-            if (!uid || moderatorAuth?.uid !== uid) return;
-            historyWriting = true;
-            let failed = false;
-            try {
-                for (const [id, pending] of historyPending) {
-                    if (moderatorAuth?.uid !== uid) break;
-                    if (pending.source) await uploadMediaAsset(pending.source);
-                    const entry = { item: pending.item, savedAt: pending.savedAt };
-                    const response = await firebaseFetch(historyUrl(uid, id), {
-                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(entry)
-                    });
-                    if (!response.ok) throw await getFirebaseError(response);
-                    if (historyPending.get(id) === pending) historyPending.delete(id);
-                }
-            } catch (error) {
-                failed = true;
-                console.error('История не сохранена в облако:', error);
-                renderModeratorHistory('Не удалось сохранить историю в облаке: ' + error.message);
-            } finally {
-                historyWriting = false;
-                if (!failed) renderModeratorHistory();
-            }
-        }
-
-        async function restoreHistoryItem(id) {
-            const entry = moderatorHistory[id];
-            if (!entry?.item) return;
-            const item = JSON.parse(JSON.stringify(entry.item));
-            if (item.assetKey && !item.url) {
-                const response = await firebaseFetch(FIREBASE_ASSETS_URL + '/' + encodeURIComponent(item.assetKey) + '.json', { cache: 'force-cache' });
+        let activeSnapshotSaveQueue = Promise.resolve();
+        function persistActiveSnapshot(snapshot, uid, version) {
+            if (!uid) return Promise.resolve();
+            const copy = JSON.parse(JSON.stringify(snapshot));
+            const record = { items: copy.map(serializeOverlayForCloud), savedAt: Date.now() };
+            cacheActiveSnapshot({ ...record, dirty: true }, uid);
+            activeSnapshotSaveQueue = activeSnapshotSaveQueue.catch(() => {}).then(async () => {
+                await Promise.all(copy.map(uploadMediaAsset));
+                const response = await firebaseFetch(activeSnapshotUrl(uid), {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(record)
+                });
                 if (!response.ok) throw await getFirebaseError(response);
-                item.url = await response.json();
-                if (typeof item.url !== 'string') throw new Error('Медиафайл недоступен');
-            }
-            if (item.type === 'music') { await addMusicTrack(item.url, item.title); return; }
-            if (item.type === 'shared-timer') {
-                if (activeOverlays.some(current => current.id === 'shared_stream_timer')) {
-                    showToast('Общий таймер уже добавлен', 'warning'); return;
+                if (moderatorAuth?.uid === uid && version === activeSnapshotVersion) {
+                    cacheActiveSnapshot({ ...record, dirty: false }, uid);
                 }
-                item.id = 'shared_stream_timer';
-                item.content.endsAt = null;
-            } else item.id = 'history_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-            item.hidden = false;
-            if (item.playback) item.playback = { ...item.playback, paused: false, position: 0, updatedAt: Date.now(), commandId: item.id };
-            addVisualOverlay(item);
-            renderOverlays();
-            if (item.type === 'text') liveTextItemId = item.id;
-            if (!await saveAndBroadcast()) throw new Error('Проверьте подключение');
+            }).catch(error => {
+                showToast('Список сохранён на этом устройстве; Firebase недоступен: ' + error.message, 'warning');
+            });
+            return activeSnapshotSaveQueue;
         }
 
         function saveAndBroadcast() {
-            for (const item of activeOverlays) {
-                if (moderatorHistory[item.id]) rememberModeratorElement(item);
-            }
+            const snapshotUid = document.body.classList.contains('obs-overlay-mode') ? null : moderatorAuth?.uid;
+            const snapshotVersion = ++activeSnapshotVersion;
             const mutationVersion = ++overlayMutationVersion;
             const snapshot = activeOverlays.map(item => {
                 if (typeof item.url === 'string' && item.url.startsWith('data:')) item.assetKey = item.assetKey || item.id;
                 return { ...item };
             });
             const localState = snapshot.map(serializeOverlayForCloud);
+            void persistActiveSnapshot(snapshot, snapshotUid, snapshotVersion);
             lastCloudString = JSON.stringify(localState.map(getCloudStateFingerprint));
             cloudWritesPending++;
             cloudSaveQueue = cloudSaveQueue.catch(() => {}).then(() =>
@@ -2042,7 +1932,7 @@
             let track = remoteMotion.get(item.id);
             if (track && last.t <= track.lastTimestamp) return false;
             if (!track || now - track.receivedAt > 4000) {
-                track = { points: [], offset: now - last.t, delay: 350, playhead: -Infinity,
+                track = { points: [], offset: now - last.t, delay: 200, playhead: -Infinity,
                     receivedAt: now, lastTimestamp: -Infinity };
                 const first = samples[0];
                 track.points.push({ ...first, t: first.t - 50, x: item.x, y: item.y,
@@ -2050,7 +1940,7 @@
             } else {
                 // Buffer the measured packet interval instead of stopping at each HTTP response.
                 const interval = now - track.receivedAt;
-                track.delay = Math.min(1200, Math.max(350, interval * 1.25, track.delay * 0.97));
+                track.delay = Math.min(900, Math.max(200, interval * 1.1, track.delay * 0.94));
                 track.offset = Math.min(track.offset, now - last.t);
             }
             for (const point of samples) {
@@ -2231,6 +2121,13 @@
                     newData = newData.filter(item => item.id !== 'moderation_dog_pet');
                     if (fetchMutationVersion !== overlayMutationVersion || cloudWritesPending > 0 || isDragging || isResizingOverlay || wheelSaveTimers.size || videoVolumeSaveTimer !== null) return;
                     lastSyncedOverlaySnapshot = normalizeCloudOverlayList(newData);
+                    const restoringAccount = restoreActiveSnapshot && !document.body.classList.contains('obs-overlay-mode');
+                    if (restoringAccount) {
+                        restoreActiveSnapshot = false;
+                        // Keep live changes from other moderators; restore missing saved elements once.
+                        const liveIds = new Set(newData.map(item => item.id));
+                        newData = newData.concat(savedActiveSnapshot.filter(item => !liveIds.has(item.id)));
+                    }
                     const previousItems = new Map(activeOverlays.map(item => [item.id, item]));
                     newData = newData.map(item => {
                         const previous = item && previousItems.get(item.id);
@@ -2253,10 +2150,17 @@
                             renderOverlaysSmart();
                         }
                         migrateLegacyMedia(activeOverlays);
+                        if (!restoringAccount && !document.body.classList.contains('obs-overlay-mode')) {
+                            void persistActiveSnapshot(activeOverlays, moderatorAuth?.uid, ++activeSnapshotVersion);
+                        }
                     }
                     if (!stateInitialized) {
                         stateInitialized = true;
-                        if (!document.body.classList.contains('obs-overlay-mode')) ensureLiveTextItem();
+                        if (!restoringAccount && !document.body.classList.contains('obs-overlay-mode')) ensureLiveTextItem();
+                    }
+                    if (restoringAccount) {
+                        liveTextItemId = activeOverlays.find(item => item.type === 'text')?.id || null;
+                        void saveAndBroadcast();
                     }
                 })
                 .catch(err => console.error("Ошибка загрузки:", err))
@@ -2287,7 +2191,7 @@
                 item.anim = 'anim-none';
             }
             activeOverlays.push(item);
-            rememberModeratorElement(item);
+            // The active list is saved by saveAndBroadcast().
         }
 
         function setupBackstageControls() {
@@ -5089,7 +4993,7 @@
                 renderOverlays();
                 status.textContent = 'Не удалось отправить музыку. Проверьте соединение.';
             } else {
-                rememberModeratorElement(item);
+                // The active list is saved by saveAndBroadcast().
                 status.textContent = 'Трек отправлен в OBS. Это подтверждение отправки, а не воспроизведения на компьютере стримера.';
             }
             refreshMusicControls();
