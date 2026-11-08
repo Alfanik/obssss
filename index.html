@@ -135,7 +135,7 @@
         @media(prefers-reduced-motion:reduce){#main-header .animate-pulse,#view-operator .animate-pulse:not(#operator-overlay-canvas *){animation:none}}
         #overlay-stage{position:relative;overflow:hidden;padding:14.0625% 0;background:#201c24;border:1px dashed #695364;border-radius:12px;isolation:isolate}
         #overlay-stage .stage-label{position:absolute;left:12px;top:9px;color:#c4b1be;font-size:11px;pointer-events:none}
-        #overlay-stage #preview-container{width:50%;margin:0 25%;overflow:visible;border:0;border-radius:0;outline:2px solid #ef354e}
+        #overlay-stage #preview-container{width:70%;margin:0 15%;overflow:visible;border:0;border-radius:0;outline:2px solid #ef354e}
         #preview-container:after{content:"Экран стрима · 1920 × 1080";position:absolute;bottom:100%;left:0;margin-bottom:7px;color:#ff9ab0;font-size:10px;white-space:nowrap;pointer-events:none}
         #operator-overlay-canvas{width:1920px;height:1080px;left:0;top:0;overflow:visible;transform-origin:0 0}
         .stage-placement{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #443744}
@@ -2038,8 +2038,8 @@
                 // The left gutter is half a frame wide. Keep the whole item outside.
                 const width = parseFloat(item.width) || ({ image: 400, video: 500,
                     youtube: 500, tiktok: 325, 'shared-timer': 500 })[item.type] || 1920;
-                item.scale = Math.min(item.scale || 1, 800 / width);
-                item.x = -25;
+                // Preserve broadcast size; park the right edge outside the frame.
+                item.x = -(width * (item.scale || 1) * (item.stretchX || 1) / 2 + 48) / 1920 * 100;
                 item.y = 50;
                 item.anim = 'anim-none';
             }
@@ -3511,8 +3511,8 @@
             const deltaPercentX = ((clientX - dragStartX) / rect.width) * 100;
             const deltaPercentY = ((clientY - dragStartY) / rect.height) * 100;
             // Keep the centre inside the outer stage, with a small grab margin.
-            item.x = Math.min(145, Math.max(-45, elementStartX + deltaPercentX));
-            item.y = Math.min(145, Math.max(-45, elementStartY + deltaPercentY));
+            item.x = Math.min(Math.max(145, elementStartX), Math.max(Math.min(-45, elementStartX), elementStartX + deltaPercentX));
+            item.y = Math.min(Math.max(145, elementStartY), Math.max(Math.min(-45, elementStartY), elementStartY + deltaPercentY));
             if (node && node.isConnected) applyOverlayTransform(node, item, false);
 
             const now = Date.now();
@@ -3949,7 +3949,7 @@
                 id: item.id, type: item.type, durationMs: item.durationMs
             });
             if (overlayTransformFrame) return;
-            overlayTransformFrame = requestAnimationFrame(() => {
+            overlayTransformFrame = requestAnimationFrame(function paintOverlayFrame(timestamp) {
                 overlayTransformFrame = 0;
                 const sizes = new Map();
                 // Measure each canvas once, before any style writes.
@@ -3964,19 +3964,56 @@
                 }
                 for (const [element, pose] of pendingOverlayTransforms) {
                     const size = sizes.get(element.parentElement);
-                    if (!element.isConnected || !size) continue;
-                    updateStagedScene(element, pose, size);
-                    element.style.transition = element.dataset.poseInitialized &&
-                        element.parentElement.id !== 'operator-overlay-canvas'
-                        ? 'transform 100ms linear' : 'none';
+                    if (!element.isConnected || !size) {
+                        pendingOverlayTransforms.delete(element);
+                        continue;
+                    }
+                    const interactive = element.parentElement.id === 'operator-overlay-canvas';
+                    const previous = element._displayPose;
+                    const dt = previous ? Math.min(64, Math.max(1, timestamp - previous.time)) : 16;
+                    const blend = interactive || !previous ? 1 : 1 - Math.exp(-dt / 110);
+                    const display = { ...pose, time: timestamp };
+                    let settled = true;
+                    for (const key of ['x', 'y', 'scale', 'stretchX', 'stretchY']) {
+                        const gap = previous ? pose[key] - previous[key] : 0;
+                        const tolerance = key === 'x' || key === 'y' ? 0.015 : 0.0005;
+                        display[key] = Math.abs(gap) <= tolerance ? pose[key] : previous[key] + gap * blend;
+                        if (Math.abs(display[key] - pose[key]) > tolerance) settled = false;
+                    }
+                    element._displayPose = display;
+                    if (interactive || settled) pendingOverlayTransforms.delete(element);
+                    updateStagedScene(element, display, size);
+                    if (interactive && element.classList.contains('draggable-item')) {
+                        let grip = element.querySelector('[data-stage-grip]');
+                        if (!grip) {
+                            grip = document.createElement('button');
+                            grip.type = 'button';
+                            grip.dataset.stageGrip = 'true';
+                            grip.textContent = '✥';
+                            grip.title = 'Перетащить элемент в кадр';
+                            grip.setAttribute('aria-label', grip.title);
+                            grip.style.cssText = 'position:absolute;right:0;top:50%;width:36px;height:36px;border:2px solid white;border-radius:8px;background:#ef354e;color:white;font:24px/1 system-ui;cursor:grab;touch-action:none;z-index:50;transform-origin:right center;pointer-events:auto';
+                            grip.onpointerdown = event => {
+                                event.stopPropagation();
+                                startDrag(event, pose.id);
+                                if (dragSession) dragSession.node = element;
+                            };
+                            element.appendChild(grip);
+                        }
+                        const zoom = element.parentElement.getBoundingClientRect().width / 1920 || 1;
+                        grip.style.transform = `translateY(-50%) scale(${1 / (zoom * pose.scale * pose.stretchX)}, ${1 / (zoom * pose.scale * pose.stretchY)})`;
+                        grip.style.display = pose.x < 0 || pose.x > 100 || pose.y < 0 || pose.y > 100 ? 'block' : 'none';
+                    }
+                    const rendered = display;
+                    element.style.transition = 'none';
                     element.dataset.poseInitialized = 'true';
                     element.style.left = '0';
                     element.style.top = '0';
                     // Older OBS Chromium does not support the individual CSS translate property.
                     element.style.removeProperty('translate');
-                    element.style.transform = `translate3d(${pose.x * size.width / 100}px, ${pose.y * size.height / 100}px, 0) translate3d(-50%, -50%, 0) scaleX(${pose.scale * pose.stretchX}) scaleY(${pose.scale * pose.stretchY})`;
+                    element.style.transform = `translate3d(${rendered.x * size.width / 100}px, ${rendered.y * size.height / 100}px, 0) translate3d(-50%, -50%, 0) scaleX(${rendered.scale * rendered.stretchX}) scaleY(${rendered.scale * rendered.stretchY})`;
                 }
-                pendingOverlayTransforms.clear();
+                if (pendingOverlayTransforms.size) overlayTransformFrame = requestAnimationFrame(paintOverlayFrame);
             });
         }
 
