@@ -2779,6 +2779,11 @@
         }
 
         function buildDancingCharacter() {
+            const url = escapeHtml(new URL('dance-transparent.webm', window.location.href).href);
+            return `<video class="dell-dance-character" src="${url}" autoplay muted loop playsinline preload="auto" aria-label="Танец героини" style="display:block;width:480px;height:648px;object-fit:contain;background:transparent;filter:drop-shadow(5px 8px 5px rgba(0,0,0,.25))"></video>`;
+        }
+
+        function buildOriginalDancingSvg() {
             // Native SVG timelines do not depend on CSS animation overrides in OBS.
             const swing = (values, cx, cy) => '<animateTransform attributeName="transform" type="rotate" values="' + values.split(';').map(v => v + ' ' + cx + ' ' + cy).join(';') + '" dur="1.6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;.25;.5;.75;1" keySplines=".42 0 .58 1;.42 0 .58 1;.42 0 .58 1;.42 0 .58 1"/>';
             return `<svg xmlns="http://www.w3.org/2000/svg" class="dell-dance-character" width="380" height="760" viewBox="0 0 380 760" role="img" aria-label="Рыжеволосая героиня в рубашке и галстуке танцует" style="display:block;overflow:visible">
@@ -2880,7 +2885,7 @@
             const item = {
                 id: 'dance_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
                 type: 'widget', title: 'Танец рыжеволосой героини',
-                html: buildDancingCharacter(), width: '380px', height: '760px',
+                html: buildDancingCharacter(), width: '480px', height: '648px',
                 anim: 'anim-none', scale: 0.8, x: 78, y: 62, hidden: false
             };
             addVisualOverlay(item, 'dances');
@@ -5255,7 +5260,7 @@
             const preview = document.getElementById('dance-local-preview');
             if (!preview || preview.childElementCount) return;
             preview.innerHTML = buildDancingCharacter();
-            const svg = preview.querySelector('svg');
+            const svg = preview.querySelector('video, svg');
             if (svg) {
                 svg.style.width = 'auto';
                 svg.style.height = '380px';
