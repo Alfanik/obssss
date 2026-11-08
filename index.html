@@ -133,6 +133,14 @@
         @media(max-width:1023px){body:not(.obs-overlay-mode) #main-header{padding:20px 18px;flex-wrap:wrap}body:not(.obs-overlay-mode) #view-operator{padding:18px;grid-template-columns:1fr}#main-header>div:last-child{justify-content:flex-start}#main-header>div:last-child>div:first-child{display:none}}
         @media(max-width:600px){.dell-title{font-size:25px}.dell-subtitle{font-size:10px}#main-header button{padding:9px 11px}#view-operator>div:last-child>div,#view-operator>div:first-child>div{padding:16px}#view-operator #active-elements-list{min-height:140px;max-height:45vh}#view-operator h2{font-size:14px}}
         @media(prefers-reduced-motion:reduce){#main-header .animate-pulse,#view-operator .animate-pulse:not(#operator-overlay-canvas *){animation:none}}
+        #overlay-stage{position:relative;overflow:hidden;padding:14.0625% 0;background:#201c24;border:1px dashed #695364;border-radius:12px;isolation:isolate}
+        #overlay-stage .stage-label{position:absolute;left:12px;top:9px;color:#c4b1be;font-size:11px;pointer-events:none}
+        #overlay-stage #preview-container{width:50%;margin:0 25%;overflow:visible;border:0;border-radius:0;outline:2px solid #ef354e}
+        #preview-container:after{content:"Экран стрима · 1920 × 1080";position:absolute;bottom:100%;left:0;margin-bottom:7px;color:#ff9ab0;font-size:10px;white-space:nowrap;pointer-events:none}
+        #operator-overlay-canvas{width:1920px;height:1080px;left:0;top:0;overflow:visible;transform-origin:0 0}
+        .stage-placement{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #443744}
+        .stage-placement button{padding:8px 10px;border:1px solid #823249;background:#44212d;font-size:12px}
+        .stage-placement p{font-size:11px;color:#b3a6b6}
     </style>
 </head>
 <body class="bg-obs-dark text-slate-100 font-sans min-h-screen antialiased flex flex-col selection:bg-indigo-600 selection:text-white">
@@ -178,9 +186,12 @@
                 
                 <details id="overlay-layout-editor" class="dell-layout-editor">
                     <summary><span><i class="fa-solid fa-up-down-left-right" aria-hidden="true"></i> Расположение элементов</span><span class="dell-editor-hint">Открыть редактор</span></summary>
-                    <p class="dell-editor-help">Перетаскивайте элементы мышью. Колесо — масштаб, Alt и край окна — обрезка сайта.</p>
-                    <div id="preview-container" class="relative w-full aspect-video rounded-xl overflow-hidden group select-none">
-                        <div id="operator-overlay-canvas" class="absolute inset-0 z-20 overflow-hidden pointer-events-auto"></div>
+                    <p class="dell-editor-help">Красная рамка — экран стрима. Область вокруг — за кадром: подготовьте элемент там и перетащите внутрь. Колесо — масштаб, Alt и край сайта — обрезка.</p>
+                    <div id="overlay-stage">
+                        <span class="stage-label">За кадром</span>
+                        <div id="preview-container" class="relative aspect-video group select-none">
+                            <div id="operator-overlay-canvas" class="absolute z-20 pointer-events-auto"></div>
+                        </div>
                     </div>
                 </details>
 
@@ -2009,7 +2020,61 @@
                 .finally(() => { cloudStateFetchPending = false; });
         }
 
+        const backstageTabs = new Set();
+        function toggleBackstagePlacement(tab, button) {
+            const enabled = !backstageTabs.has(tab);
+            if (enabled) backstageTabs.add(tab); else backstageTabs.delete(tab);
+            button.setAttribute('aria-pressed', String(enabled));
+            button.textContent = enabled ? '✓ Добавлять за кадром' : 'Добавить на границу холста';
+            document.getElementById('overlay-layout-editor').open = true;
+            updateOverlayPositions(true);
+        }
+
+        function addVisualOverlay(item, tab) {
+            tab = tab || ({ text: 'text', image: 'image', video: 'video',
+                youtube: 'video', tiktok: 'video', website: 'links',
+                'shared-timer': 'links', widget: 'widgets' })[item.type];
+            if (backstageTabs.has(tab)) {
+                // The left gutter is half a frame wide. Keep the whole item outside.
+                const width = parseFloat(item.width) || ({ image: 400, video: 500,
+                    youtube: 500, tiktok: 325, 'shared-timer': 500 })[item.type] || 1920;
+                item.scale = Math.min(item.scale || 1, 800 / width);
+                item.x = -25;
+                item.y = 50;
+                item.anim = 'anim-none';
+            }
+            activeOverlays.push(item);
+        }
+
+        function setupBackstageControls() {
+            for (const tab of ['text', 'image', 'video', 'links', 'widgets', 'awards']) {
+                const panel = document.getElementById('tab-content-' + tab);
+                if (!panel || panel.querySelector('.stage-placement')) continue;
+                const controls = document.createElement('div');
+                controls.className = 'stage-placement';
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = 'Добавить на границу холста';
+                button.setAttribute('aria-pressed', 'false');
+                button.onclick = () => toggleBackstagePlacement(tab, button);
+                const hint = document.createElement('p');
+                hint.textContent = 'Включите перед добавлением. Новые элементы появятся слева за кадром; нажмите ещё раз для обычного добавления.';
+                controls.append(button, hint);
+                panel.prepend(controls);
+            }
+            const frame = document.getElementById('preview-container');
+            if (frame) {
+                new ResizeObserver(() => updateOverlayPositions(true)).observe(frame);
+            }
+        }
+        document.addEventListener('DOMContentLoaded', setupBackstageControls);
+
         function updateOverlayPositions(positionsOnly = false) {
+            const preview = document.getElementById('preview-container');
+            const operator = document.getElementById('operator-overlay-canvas');
+            if (preview && operator && preview.clientWidth > 0) {
+                operator.style.transform = 'scale(' + preview.clientWidth / 1920 + ')';
+            }
             const canvases = [document.getElementById('obs-render-canvas'),
                 document.getElementById('operator-overlay-canvas')];
             activeOverlays.forEach(item => {
@@ -2074,7 +2139,7 @@
                     hidden: false
                 };
                 liveTextItemId = newItem.id;
-                activeOverlays.push(newItem);
+                addVisualOverlay(newItem);
                 saveAndBroadcast();
                 renderOverlays();
             }
@@ -2148,7 +2213,7 @@
                 hidden: false
             };
             liveTextItemId = newItem.id;
-            activeOverlays.push(newItem);
+            addVisualOverlay(newItem);
             saveAndBroadcast();
             renderOverlays();
             showToast('Текстовый блок создан');
@@ -2159,7 +2224,7 @@
             if (!file) return;
             try {
                 const url = await fileToDataUrl(file);
-                activeOverlays.push({
+                addVisualOverlay({
                     id: 'img_' + Date.now(),
                     type: 'image',
                     url,
@@ -2183,7 +2248,7 @@
         function sendImageUrlOverlay() {
             const url = document.getElementById('image-url-input').value.trim();
             if (!url) return showToast('Укажите URL картинки', 'warning');
-            activeOverlays.push({
+            addVisualOverlay({
                 id: 'img_' + Date.now(),
                 type: 'image',
                 url: url,
@@ -2473,7 +2538,7 @@
             try {
                 const url = await fileToDataUrl(file);
                 const volumeValue = Number(document.getElementById('video-volume').value);
-                activeOverlays.push({
+                addVisualOverlay({
                     id: 'vid_' + Date.now(),
                     type: 'video',
                     title: file.name,
@@ -2538,7 +2603,7 @@
                     ? 'TikTok: используйте полную ссылку вида tiktok.com/@user/video/ID; короткие ссылки vm.tiktok.com не поддерживаются'
                     : 'Проверьте ссылку на видео', 'warning');
             }
-            activeOverlays.push({
+            addVisualOverlay({
                 id: 'vid_' + Date.now(),
                 type: media.type,
                 title: media.type === 'video' ? (rawUrl.split('/').pop().split('?')[0] || 'Видео по ссылке') : undefined,
@@ -2814,7 +2879,7 @@
             }
 
             const widgetId = 'widget_' + Date.now();
-            activeOverlays.push({
+            addVisualOverlay({
                 id: widgetId,
                 type: 'widget',
                 title: title,
@@ -3070,7 +3135,7 @@
             const w = normalizeCustomWidget(sourceWidget);
             const widgetCount = activeOverlays.filter(item => item.type === 'widget').length;
             const fullscreen = w.width >= 1920 && w.height >= 1080;
-            activeOverlays.push({
+            addVisualOverlay({
                 id: 'custom_widget_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
                 customWidgetId: w.id,
                 type: 'widget',
@@ -3357,8 +3422,15 @@
         }
 
         // --- ПЛАВНОЕ ПЕРЕТАСКИВАНИЕ В РЕАЛЬНОМ ВРЕМЕНИ БЕЗ СБРОСА ВИДЕО ---
+        let dragSession = null;
         function startDrag(e, itemId) {
             if (e.button !== undefined && e.button !== 0) return;
+            const frame = document.getElementById('preview-container');
+            const dragItem = activeOverlays.find(current => current.id === itemId);
+            const rect = frame && frame.getBoundingClientRect();
+            if (!dragItem || !rect || !rect.width || !rect.height) return;
+            dragSession = { item: dragItem, rect, node: e.currentTarget };
+            lastDragBroadcastAt = 0;
             e.preventDefault();
             if (e.currentTarget && e.currentTarget.setPointerCapture && e.pointerId !== undefined) {
                 e.currentTarget.setPointerCapture(e.pointerId);
@@ -3434,36 +3506,19 @@
                 return;
             }
 
-            if (!isDragging || !dragTargetId) return;
-            const container = document.getElementById('preview-container');
-            if (!container) return;
+            if (!isDragging || !dragTargetId || !dragSession) return;
+            const { rect, item, node } = dragSession;
+            const deltaPercentX = ((clientX - dragStartX) / rect.width) * 100;
+            const deltaPercentY = ((clientY - dragStartY) / rect.height) * 100;
+            // Keep the centre inside the outer stage, with a small grab margin.
+            item.x = Math.min(145, Math.max(-45, elementStartX + deltaPercentX));
+            item.y = Math.min(145, Math.max(-45, elementStartY + deltaPercentY));
+            if (node && node.isConnected) applyOverlayTransform(node, item, false);
 
-            const rect = container.getBoundingClientRect();
-            const deltaX = clientX - dragStartX;
-            const deltaY = clientY - dragStartY;
-
-            const deltaPercentX = (deltaX / rect.width) * 100;
-            const deltaPercentY = (deltaY / rect.height) * 100;
-
-            let newX = Math.min(Math.max(elementStartX + deltaPercentX, 5), 95);
-            let newY = Math.min(Math.max(elementStartY + deltaPercentY, 5), 95);
-
-            const item = activeOverlays.find(i => i.id === dragTargetId);
-            if (item) {
-                item.x = newX;
-                item.y = newY;
-
-                // Двигаем DOM-элемент напрямую без пересоздания внутренностей (видео не перезапускается!)
-                const targetNode = container.querySelector(`[data-id="${dragTargetId}"]`);
-                if (targetNode) {
-                    applyOverlayTransform(targetNode, item);
-                }
-
-                const now = Date.now();
-                if (now - lastDragBroadcastAt >= 50) {
-                    lastDragBroadcastAt = now;
-                    sendFastUpdate(item, { x: newX, y: newY });
-                }
+            const now = Date.now();
+            if (now - lastDragBroadcastAt >= 50) {
+                lastDragBroadcastAt = now;
+                sendFastUpdate(item, { x: item.x, y: item.y });
             }
         }
 
@@ -3498,6 +3553,7 @@
                 }
                 isDragging = false;
                 dragTargetId = null;
+                dragSession = null;
             }
         }
 
@@ -3861,11 +3917,36 @@
         let overlayTransformFrame = 0;
         const overlayCanvasResizeObserver = new ResizeObserver(() => updateOverlayPositions());
 
-        function applyOverlayTransform(node, item) {
-            applyOverlayVideoVolume(node, item);
+        function updateStagedScene(node, pose, size) {
+            if (!['widget', 'ephemeral-widget'].includes(pose.type) || node.dataset.sceneStarted) return;
+            const halfWidth = node.offsetWidth * pose.scale * pose.stretchX / 2;
+            const halfHeight = node.offsetHeight * pose.scale * pose.stretchY / 2;
+            const x = pose.x * size.width / 100, y = pose.y * size.height / 100;
+            const outside = x + halfWidth <= 0 || x - halfWidth >= size.width ||
+                y + halfHeight <= 0 || y - halfHeight >= size.height;
+            const state = outside ? 'paused' : 'running';
+            if (node.dataset.sceneState !== state) {
+                for (const child of [node, ...node.querySelectorAll('*')]) {
+                    child.style.setProperty('animation-play-state', state, 'important');
+                }
+                node.dataset.sceneState = state;
+            }
+            if (!outside) {
+                node.dataset.sceneStarted = 'true';
+                if (pose.type === 'ephemeral-widget') {
+                    window.setTimeout(() => {
+                        if (node.isConnected) removeOverlayItem(pose.id);
+                    }, Math.max(1000, Math.min(30000, Number(pose.durationMs) || 8000)));
+                }
+            }
+        }
+
+        function applyOverlayTransform(node, item, updateMedia = true) {
+            if (updateMedia) applyOverlayVideoVolume(node, item);
             pendingOverlayTransforms.set(node, {
                 x: item.x, y: item.y, scale: item.scale || 1,
-                stretchX: item.stretchX || 1, stretchY: item.stretchY || 1
+                stretchX: item.stretchX || 1, stretchY: item.stretchY || 1,
+                id: item.id, type: item.type, durationMs: item.durationMs
             });
             if (overlayTransformFrame) return;
             overlayTransformFrame = requestAnimationFrame(() => {
@@ -3884,10 +3965,10 @@
                 for (const [element, pose] of pendingOverlayTransforms) {
                     const size = sizes.get(element.parentElement);
                     if (!element.isConnected || !size) continue;
-                    element.style.transition = element.dataset.poseInitialized
-                        ? (element.parentElement.id === 'operator-overlay-canvas'
-                            ? 'transform 60ms linear' : 'transform 80ms linear')
-                        : 'none';
+                    updateStagedScene(element, pose, size);
+                    element.style.transition = element.dataset.poseInitialized &&
+                        element.parentElement.id !== 'operator-overlay-canvas'
+                        ? 'transform 100ms linear' : 'none';
                     element.dataset.poseInitialized = 'true';
                     element.style.left = '0';
                     element.style.top = '0';
@@ -4175,7 +4256,7 @@
             node.dataset.id = item.id;
             node.dataset.renderSignature = getOverlayRenderSignature(item);
             const animClass = animate && item.anim !== 'anim-none' ? (item.anim || 'anim-fade') : '';
-            const isPointerInteractive = isInteractive && item.type !== 'ephemeral-widget';
+            const isPointerInteractive = isInteractive && item.type !== 'music';
             node.className = `absolute flex items-center justify-center ${animClass} ${isPointerInteractive ? 'draggable-item pointer-events-auto cursor-move' : 'pointer-events-none'}`;
             if (animClass) {
                 node.addEventListener('animationend', event => {
@@ -4187,7 +4268,11 @@
             node.style.top = item.y + '%';
             applyOverlayTransform(node, item);
             node.style.willChange = 'translate, transform';
-            node.style.transition = isInteractive ? 'transform 60ms linear' : 'translate 80ms linear, transform 80ms linear';
+            node.style.transition = 'none';
+            if (isInteractive) {
+                node.style.touchAction = 'none';
+                node.ondragstart = event => event.preventDefault();
+            }
 
             if (isPointerInteractive) {
                 node.onpointerdown = (e) => startDrag(e, item.id);
@@ -4286,11 +4371,7 @@
                 });
             }
             applyOverlayVideoVolume(node, item);
-            if (item.type === 'ephemeral-widget') {
-                window.setTimeout(() => {
-                    if (node.isConnected) removeOverlayItem(item.id);
-                }, Math.max(1000, Math.min(30000, Number(item.durationMs) || 8000)));
-            }
+            // Timed scenes start their lifetime when they first enter the frame.
             if (item.type === 'audio' && !isInteractive && item.url && !playedOverlayAudioIds.has(item.id)) {
                 playedOverlayAudioIds.add(item.id);
                 const audio = document.createElement('audio');
@@ -4438,7 +4519,8 @@
                 anim: 'anim-none', scale: 1, width: '1920px', height: '1080px',
                 x: 50, y: 50, hidden: false
             };
-            activeOverlays.push(item);
+            const tab = document.getElementById('tab-content-awards').classList.contains('hidden') ? 'widgets' : 'awards';
+            addVisualOverlay(item, tab);
             renderOverlays();
             saveAndBroadcast().then(saved => {
                 if (saved) return;
@@ -4461,7 +4543,7 @@
                 item = { id: 'shared_stream_timer', type: 'shared-timer', title: 'Общий таймер',
                     content: { durationMs, remainingMs: durationMs, endsAt: null },
                     anim: 'anim-none', scale: 1, x: 50, y: 25, hidden: false };
-                activeOverlays.push(item);
+                addVisualOverlay(item);
             }
             const state = item.content || {};
             const now = Date.now();
@@ -4666,7 +4748,7 @@
                 const value = Number(document.getElementById(id).value);
                 return Number.isFinite(value) && value > 0 ? Math.round(Math.max(min, Math.min(max, value))) : fallback;
             };
-            activeOverlays.push({
+            addVisualOverlay({
                 id: 'site_' + Date.now(), type: 'website', title: 'Сайт: ' + url.hostname,
                 url: url.href, width: dimension('website-width', 640, 200, 1920) + 'px',
                 height: dimension('website-height', 400, 100, 1080) + 'px',
