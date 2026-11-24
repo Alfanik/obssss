@@ -4923,11 +4923,7 @@
             }
 
             node.innerHTML = contentHtml;
-            node.querySelectorAll('audio[data-christmas-bells]').forEach(audio => {
-                    audio.volume = .55;
-                    audio.play().catch(error => console.warn('Новогодние бубенчики: воспроизведение недоступно', error));
-                });
-            }
+
             node.querySelectorAll('video.dell-dance-character').forEach(video => {
                 startDanceVideo(video, message => {
                     if (message) console.warn('Танец:', message);
