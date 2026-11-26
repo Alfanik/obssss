@@ -4465,6 +4465,12 @@
         }
 
         function applyOverlayTransform(node, item, updateMedia = true) {
+            if (item.id.startsWith('drawing_')) {
+                pendingOverlayTransforms.delete(node);
+                node.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;transform:none;translate:none;transition:none;animation:none;pointer-events:none;z-index:9000';
+                return;
+            }
+
             if (updateMedia) applyOverlayVideoVolume(node, item);
             pendingOverlayTransforms.set(node, {
                 x: item.x, y: item.y, scale: item.scale || 1,
@@ -4923,7 +4929,13 @@
 
             if (String(contentHtml).includes('chibi-reindeer-team')) contentHtml = buildCurrentChristmasScene();
             node.innerHTML = contentHtml;
-            if (item.id.startsWith('drawing_')) { node.style.width='100%'; node.style.height='100%'; node.style.pointerEvents='none'; node.style.zIndex='9000'; }
+            if (item.id.startsWith('drawing_')) {
+                const svg = node.querySelector('svg');
+                if (svg) {
+                    svg.setAttribute('preserveAspectRatio', 'none');
+                    svg.style.cssText = 'position:absolute;inset:0;display:block;width:100%;height:100%;max-width:none;max-height:none;overflow:visible';
+                }
+            }
 
             node.querySelectorAll('video.dell-dance-character').forEach(video => {
                 startDanceVideo(video, message => {
@@ -5654,9 +5666,13 @@ renderOverlays = function(...args) {
  const originalTab=switchControlTab;
  switchControlTab=function(tab){if(tab!=='drawing'){cancel();toggle(false);}return originalTab(tab);};
  function point(event){
-  const rect=surface.getBoundingClientRect();
-  return [Math.round(Math.max(0,Math.min(1920,(event.clientX-rect.left)*1920/rect.width))),
-          Math.round(Math.max(0,Math.min(1080,(event.clientY-rect.top)*1080/rect.height)))];
+  const cursor=surface.createSVGPoint();
+  cursor.x=event.clientX;cursor.y=event.clientY;
+  const matrix=surface.getScreenCTM();
+  if(!matrix)return [0,0];
+  const local=cursor.matrixTransform(matrix.inverse());
+  return [Math.round(Math.max(0,Math.min(1920,local.x))),
+          Math.round(Math.max(0,Math.min(1080,local.y)))];
  }
  function markup(s){
   const color=/^#[0-9a-f]{6}$/i.test(s.color)?s.color:'#ff477e';
