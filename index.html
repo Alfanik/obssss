@@ -252,7 +252,8 @@
                         <button id="tab-btn-widgets" onclick="switchControlTab('widgets')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-shapes text-amber-400"></i> Виджеты
                         </button>
-                        <button id="tab-btn-dances" onclick="switchControlTab('dances')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer"><i class="fa-solid fa-person"></i> Танцульки</button>
+                        <button id="tab-btn-drawing" onclick="switchControlTab('drawing')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400">✎ Рисование</button>
+<button id="tab-btn-dances" onclick="switchControlTab('dances')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer"><i class="fa-solid fa-person"></i> Танцульки</button>
                         <button id="tab-btn-awards" onclick="switchControlTab('awards')" class="px-3 py-2 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition cursor-pointer">
                             <i class="fa-solid fa-trophy text-amber-400"></i> Премии
                         </button>
@@ -410,7 +411,8 @@
                         <button type="button" onclick="sendDancingCharacter()" class="w-full rounded-lg bg-indigo-600 p-3 text-sm font-bold">Запустить в OBS</button>
                         <p class="text-xs text-slate-400">Танец повторяется по кругу. Размер меняется колесом в редакторе. Остановить персонажа можно в активных элементах: скрыть или удалить.</p>
                     </div>
-                    <div id="tab-content-widgets" class="space-y-3 hidden">
+                    <div id="tab-content-drawing" class="space-y-4 hidden"></div>
+<div id="tab-content-widgets" class="space-y-3 hidden">
                         <label class="block text-xs font-semibold text-slate-300 mb-1">Готовые виджеты для стрима</label>
                         
                         <button onclick="openWidgetBuilderModal()" class="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 p-3.5 rounded-xl text-xs font-bold text-white transition shadow-lg cursor-pointer mb-2">
@@ -4583,7 +4585,7 @@
 
             canvases.forEach(canvas => {
                 Array.from(canvas.children).forEach(node => {
-                    if (!visibleIds.has(node.dataset.id)) node.remove();
+                    if (!visibleIds.has(node.dataset.id) && !node.hasAttribute('data-drawing-input')) node.remove();
                 });
             });
 
@@ -4843,7 +4845,7 @@
             node.dataset.id = item.id;
             node.dataset.renderSignature = getOverlayRenderSignature(item);
             const animClass = animate && item.anim !== 'anim-none' ? (item.anim || 'anim-fade') : '';
-            const isPointerInteractive = isInteractive && item.type !== 'music';
+            const isPointerInteractive = isInteractive && item.type !== 'music' && !item.id.startsWith('drawing_');
             node.className = `absolute flex items-center justify-center ${animClass} ${isPointerInteractive ? 'draggable-item pointer-events-auto cursor-move' : 'pointer-events-none'}`;
             if (animClass) {
                 node.addEventListener('animationend', event => {
@@ -4921,6 +4923,7 @@
 
             if (String(contentHtml).includes('chibi-reindeer-team')) contentHtml = buildCurrentChristmasScene();
             node.innerHTML = contentHtml;
+            if (item.id.startsWith('drawing_')) { node.style.width='100%'; node.style.height='100%'; node.style.pointerEvents='none'; node.style.zIndex='9000'; }
 
             node.querySelectorAll('video.dell-dance-character').forEach(video => {
                 startDanceVideo(video, message => {
@@ -5572,7 +5575,7 @@
 
             if (tab === 'dances') previewDancingCharacter();
             if (tab === 'accounts' && !accountAdminVerified) return;
-            ['text', 'image', 'video', 'links', 'widgets', 'dances', 'needs', 'awards', 'sounds', 'music', 'accounts'].forEach(t => {
+            ['text', 'image', 'video', 'links', 'widgets', 'dances', 'drawing', 'awards', 'sounds', 'music', 'accounts'].forEach(t => {
                 const btn = document.getElementById(`tab-btn-${t}`);
                 const content = document.getElementById(`tab-content-${t}`);
                 if (!btn || !content) return;
@@ -5623,5 +5626,91 @@ renderOverlays = function(...args) {
  activeOverlays = activeOverlays.filter(item => item.id !== 'streamer_needs');
  return originalRenderWithoutNeeds.apply(this,args);
 };
+
+(function installDrawing(){
+ let enabled=false, stroke=null, pointer=null;
+ const surface=document.createElementNS('http://www.w3.org/2000/svg','svg');
+ surface.setAttribute('data-drawing-input','');
+ surface.setAttribute('viewBox','0 0 1920 1080');
+ surface.setAttribute('preserveAspectRatio','none');
+ surface.setAttribute('aria-label','Холст для рисования');
+ surface.style.cssText='position:absolute;inset:0;width:100%;height:100%;z-index:10000;touch-action:none;cursor:crosshair;display:none';
+ const panel=document.getElementById('tab-content-drawing');
+ panel.innerHTML='<p class="text-sm text-slate-400">Рисуйте по предпросмотру. Отпустите мышь или палец, чтобы отправить штрих в OBS.</p><button id="drawing-toggle" type="button" class="bg-indigo-600 px-4 py-3 text-sm w-full" aria-pressed="false">Включить рисование</button><label class="block text-sm">Кисть<select id="drawing-brush" class="block w-full p-2 mt-1"><option value="pen">Мягкая кисть</option><option value="marker">Маркер</option><option value="neon">Неон</option><option value="rainbow">Радуга</option></select></label><div class="flex gap-4 items-center"><label>Цвет <input id="drawing-color" type="color" value="#ff477e"></label><label class="flex-1">Толщина <output id="drawing-size-value">12</output><input id="drawing-size" type="range" min="2" max="60" value="12" class="block w-full"></label></div><div class="flex gap-2"><button id="drawing-undo" type="button" class="bg-slate-700 p-3 flex-1">Отменить мой штрих</button><button id="drawing-clear" type="button" class="bg-slate-700 p-3 flex-1">Очистить рисунок</button></div><p id="drawing-status" role="status" class="text-xs text-slate-400">Рисунок общий. Очистка удаляет только рисунки.</p>';
+ const control=id=>document.getElementById('drawing-'+id),own=[];
+ function mount(){
+  const host=document.getElementById('operator-overlay-canvas');
+  if(!document.body.classList.contains('obs-overlay-mode')&&host)host.appendChild(surface);
+ }
+ const originalRender=renderOverlays;
+ renderOverlays=function(...args){const result=originalRender.apply(this,args);mount();return result;};
+ function toggle(value){
+  enabled=value;surface.style.display=value?'block':'none';
+  control('toggle').textContent=value?'Закончить рисование':'Включить рисование';
+  control('toggle').setAttribute('aria-pressed',String(value));mount();
+ }
+ control('toggle').onclick=()=>toggle(!enabled);
+ control('size').oninput=()=>control('size-value').textContent=control('size').value;
+ const originalTab=switchControlTab;
+ switchControlTab=function(tab){if(tab!=='drawing'){cancel();toggle(false);}return originalTab(tab);};
+ function point(event){
+  const rect=surface.getBoundingClientRect();
+  return [Math.round(Math.max(0,Math.min(1920,(event.clientX-rect.left)*1920/rect.width))),
+          Math.round(Math.max(0,Math.min(1080,(event.clientY-rect.top)*1080/rect.height)))];
+ }
+ function markup(s){
+  const color=/^#[0-9a-f]{6}$/i.test(s.color)?s.color:'#ff477e';
+  const line=(points,c,w,extra='')=>'<polyline points="'+points.map(p=>p.join(',')).join(' ')+'" fill="none" stroke="'+c+'" stroke-width="'+w+'" stroke-linecap="round" stroke-linejoin="round" '+extra+'/>';
+  const points=s.points.length===1?[s.points[0],[s.points[0][0]+.01,s.points[0][1]]]:s.points;
+  if(s.brush==='rainbow')return points.slice(1).map((p,i)=>line([points[i],p],'hsl('+(i*7%360)+',90%,65%)',s.size)).join('');
+  if(s.brush==='neon')return line(points,color,s.size*2,'opacity=".18"')+line(points,color,s.size*1.4,'opacity=".4"')+line(points,color,s.size)+line(points,'#ffffff',Math.max(1,s.size*.3));
+  return line(points,color,s.size,s.brush==='marker'?'opacity=".45"':'');
+ }
+ function paint(){surface.innerHTML=stroke?markup(stroke):'';}
+ surface.onpointerdown=event=>{
+  if(!enabled||pointer!==null||event.button!==0)return;
+  event.preventDefault();event.stopPropagation();
+  pointer=event.pointerId;surface.setPointerCapture(pointer);
+  stroke={points:[point(event)],color:control('color').value,size:Number(control('size').value),brush:control('brush').value};paint();
+ };
+ surface.onpointermove=event=>{
+  if(event.pointerId!==pointer||!stroke)return;
+  const p=point(event),last=stroke.points.at(-1);
+  if(Math.hypot(p[0]-last[0],p[1]-last[1])<2||stroke.points.length>=1200)return;
+  stroke.points.push(p);paint();
+ };
+ function cancel(){stroke=null;pointer=null;paint();}
+ surface.onpointercancel=cancel;
+ surface.onlostpointercapture=()=>{if(pointer!==null)cancel();};
+ surface.onpointerup=event=>{
+  if(event.pointerId!==pointer||!stroke)return;
+  const finished=stroke;pointer=null;stroke=null;
+  if(surface.hasPointerCapture(event.pointerId))surface.releasePointerCapture(event.pointerId);
+  if(activeOverlays.filter(item=>item.id.startsWith('drawing_')).length>=250){
+   paint();control('status').textContent='Холст заполнен. Очистите рисунок, чтобы продолжить.';return;
+  }
+  const id='drawing_'+Date.now()+'_'+Math.random().toString(36).slice(2,9);
+  activeOverlays.push({id,type:'widget',title:'Рисунок: '+control('brush').selectedOptions[0].textContent,
+   html:'<svg xmlns="http://www.w3.org/2000/svg" data-drawing-stroke viewBox="0 0 1920 1080" preserveAspectRatio="none" style="width:100%;height:100%;overflow:visible">'+markup(finished)+'</svg>',
+   x:50,y:50,scale:1,width:'100%',height:'100%',anim:'anim-none',hidden:false});
+  own.push(id);paint();renderOverlays();publish();
+ };
+ async function publish(){
+  control('status').textContent='Отправляем рисунок…';
+  const saved=await saveAndBroadcast();
+  control('status').textContent=saved?'Рисунок синхронизирован с OBS':'Не удалось синхронизировать. Проверьте соединение.';
+ }
+ control('undo').onclick=()=>{
+  let id;while(own.length){id=own.pop();if(activeOverlays.some(item=>item.id===id))break;id=null;}
+  if(!id)return;activeOverlays=activeOverlays.filter(item=>item.id!==id);renderOverlays();publish();
+ };
+ control('clear').onclick=()=>{
+  cancel();activeOverlays=activeOverlays.filter(item=>!item.id.startsWith('drawing_'));
+  own.length=0;renderOverlays();publish();
+ };
+ document.addEventListener('keydown',event=>{if(event.key==='Escape'){cancel();toggle(false);}});
+ mount();
+})();
+
 </script>
 </body></html>
